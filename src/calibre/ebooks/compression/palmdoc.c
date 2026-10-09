@@ -115,7 +115,11 @@ cpalmdoc_decompress(PyObject *self, PyObject *args) {
 #define MIN_MATCH_LEN 3
 #define MAX_MATCH_LEN 10
 #define MAX_MATCH_DIST 2047
-#define HASH_BITS 16
+// The table is cleared on every call and PalmDOC records are usually 4096
+// bytes, so it is kept small. Collisions only lengthen the chains, since
+// every candidate is compared byte by byte, so the size does not change the
+// output.
+#define HASH_BITS 12
 #define HASH_SIZE (1 << HASH_BITS)
 
 static inline unsigned int

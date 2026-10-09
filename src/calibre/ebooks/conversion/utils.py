@@ -693,11 +693,18 @@ class HeuristicProcessor:
         return html
 
     def detect_soft_breaks(self, html):
-        line = '(?P<initline>' + self.line_open + r'(?P<init_content>.*?)' + self.line_close + ')'
+        # line_open ends with a greedy \s* and line_close starts with one, so in
+        # the first match found the content never starts or ends with
+        # whitespace. Saying so explicitly gives the same matches, but stops
+        # the regex engine from trying every way of splitting runs of
+        # whitespace between them, which takes cubic time on lines that do not
+        # match.
+        content = r'(?!\s)(?P<{}>(?:.*?\S)??)'
+        line = '(?P<initline>' + self.line_open + content.format('init_content') + self.line_close + ')'
         line_two = (
             '(?P<line_two>'
             + re.sub(r'(ou|in|cha)', 'linetwo_', self.line_open)
-            + r'(?P<line_two_content>.*?)'
+            + content.format('line_two_content')
             + re.sub(r'(ou|in|cha)', 'linetwo_', self.line_close)
             + ')'
         )
@@ -734,7 +741,11 @@ class HeuristicProcessor:
             + self.common_in_text_beginnings
             + '|.*?'
             + self.common_in_text_endings
-            + r'<))(?P<break>((?P<break_char>((?!\s)\W))\s*(?P=break_char)?){1,10})\s*'
+            # The whitespace after a break character is possessive and there is
+            # no \s* between the break and line_close, which starts with one:
+            # nothing that follows can match whitespace that is given back, so
+            # the matches are the same without the backtracking over it
+            + r'<))(?P<break>((?P<break_char>((?!\s)\W))\s*+(?P=break_char)?){1,10})'
             + self.line_close
         )
         scene_breaks = re.compile(rf'{scene_break_regex}', re.IGNORECASE | re.UNICODE)

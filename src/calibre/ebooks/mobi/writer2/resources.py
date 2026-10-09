@@ -2,10 +2,13 @@
 # License: GPLv3 Copyright: 2012, Kovid Goyal <kovid@kovidgoyal.net>
 
 import os
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 from PIL import Image, ImageOps
 
+from calibre import detect_ncpus
 from calibre.ebooks import generate_masthead
 from calibre.ebooks.mobi import MAX_THUMB_DIMEN, MAX_THUMB_SIZE
 from calibre.ebooks.mobi.utils import mobify_image, rescale_image, write_font_record
@@ -16,6 +19,11 @@ from calibre.utils.imghdr import what
 # Image formats calibre can read but that no MOBI/AZW3 viewer can display, so
 # they are converted to PNG before being added to the book
 UNSUPPORTED_IMAGE_TYPES = frozenset({'image/webp', 'image/avif'})
+
+# Decoding and re-encoding images is done inside Qt/PIL, which release the GIL,
+# so a few threads give a near linear speedup on image heavy books. The cap
+# bounds the number of images held decoded in memory at the same time.
+MAX_IMAGE_THREADS = 4
 
 PLACEHOLDER_GIF = b'GIF89a\x01\x00\x01\x00\xf0\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00!\xfe calibre-placeholder-gif-for-azw3\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'  # noqa: E501
 
@@ -102,6 +110,31 @@ def find_tests():
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestProcessJpegsForAmazon)
 
 
+class _Failed:
+
+    def __init__(self, err):
+        self.err = err
+
+    def result(self):
+        raise self.err
+
+    def cancel(self):
+        pass
+
+
+class _Deferred:
+    # Runs the function when the result is asked for, like the sequential code did
+
+    def __init__(self, func, arg):
+        self.func, self.arg = func, arg
+
+    def result(self):
+        return self.func(self.arg)
+
+    def cancel(self):
+        pass
+
+
 class Resources:
     def __init__(self, oeb, opts, is_periodical, add_fonts=False, process_images=True):
         self.oeb, self.log, self.opts = oeb, oeb.log, opts
@@ -139,6 +172,48 @@ class Resources:
                 os.remove(pt.name)
             return func(data)
 
+    def process_images_in_parallel(self, items):
+        """
+        Yield (item, getter) for each item, in order. Calling getter() returns
+        the processed image data, or raises the exception process_image() raised.
+        Images are processed by a small pool of threads, a bounded number ahead
+        of the consumer, so results (and their order) are identical to
+        processing them one by one, only faster on multi-core machines.
+        """
+        nthreads = min(detect_ncpus(), MAX_IMAGE_THREADS) if len(items) > 1 else 1
+        pool = ThreadPoolExecutor(max_workers=nthreads) if nthreads > 1 else None
+
+        def start(item):
+            if item.media_type.lower() in UNSUPPORTED_IMAGE_TYPES:
+                self.convert_unsupported_image(item)
+            try:
+                data = item.data
+            except Exception as err:
+                return _Failed(err)
+            if pool is None:
+                return _Deferred(self.process_image, data)
+            return pool.submit(self.process_image, data)
+
+        pending = deque()
+        todo = iter(items)
+        window = 2 * nthreads if pool is not None else 1
+        try:
+            while True:
+                while len(pending) < window:
+                    item = next(todo, None)
+                    if item is None:
+                        break
+                    pending.append((item, start(item)))
+                if not pending:
+                    break
+                item, future = pending.popleft()
+                yield item, future.result
+        finally:
+            for _, future in pending:
+                future.cancel()
+            if pool is not None:
+                pool.shutdown()
+
     def add_resources(self, add_fonts):
         oeb = self.oeb
         oeb.logger.info('Serializing resources...')
@@ -165,13 +240,10 @@ class Resources:
             item = oeb.manifest.ids[cover_id]
             cover_href = item.href
 
-        for item in self.oeb.manifest.values():
-            if item.media_type not in OEB_RASTER_IMAGES:
-                continue
-            if item.media_type.lower() in UNSUPPORTED_IMAGE_TYPES:
-                self.convert_unsupported_image(item)
+        raster_items = [item for item in self.oeb.manifest.values() if item.media_type in OEB_RASTER_IMAGES]
+        for item, get_processed_data in self.process_images_in_parallel(raster_items):
             try:
-                data = self.process_image(item.data)
+                data = get_processed_data()
             except Exception:
                 self.log.warn(f'Bad image file {item.href!r}')
                 continue

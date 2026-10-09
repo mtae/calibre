@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from contextlib import suppress
+from functools import lru_cache
 
 from calibre import prints
 from calibre.ebooks.chardet import xml_to_unicode
@@ -233,44 +234,75 @@ def calibre_cover(title, author_string, series_string=None, output_format='jpg',
 UNIT_RE = re.compile(r'^(-*[0-9]*[.]?[0-9]*)\s*(%|em|ex|en|px|mm|cm|in|pt|pc|rem|q)$')
 
 
+@lru_cache(maxsize=2048)
+def _parse_length(value):
+    # Split a CSS length string into (number, unit), where unit is None for a
+    # plain number. Returns None if the string is not a length we understand.
+    # unit_convert() is called very often with the same few values.
+    try:
+        return float(value), None
+    except Exception:
+        pass
+    m = UNIT_RE.match(value)
+    if m is not None and m.group(1):
+        try:
+            number = float(m.group(1))
+        except ValueError:
+            number = 0
+        return number, m.group(2)
+
+
 def unit_convert(value, base, font, dpi, body_font_size=12):
     "Return value in pts"
     if isinstance(value, numbers.Number):
         return value
-    with suppress(Exception):
-        return float(value) * 72.0 / dpi
-    result = value
-    m = UNIT_RE.match(value)
-    if m is not None and m.group(1):
+    if isinstance(value, str):
+        parsed = _parse_length(value)
+    else:
+        with suppress(Exception):
+            return float(value) * 72.0 / dpi
+        m = UNIT_RE.match(value)
+        parsed = None
+        if m is not None and m.group(1):
+            try:
+                number = float(m.group(1))
+            except ValueError:
+                number = 0
+            parsed = number, m.group(2)
+    if parsed is None:
+        return value
+    original = value
+    value, unit = parsed
+    if unit is None:
         try:
-            value = float(m.group(1))
-        except ValueError:
-            value = 0
-        unit = m.group(2)
-        if unit == '%':
-            result = (value / 100.0) * base
-        elif unit == 'px':
-            result = value * 72.0 / dpi
-        elif unit == 'in':
-            result = value * 72.0
-        elif unit == 'pt':
-            result = value
-        elif unit == 'em':
-            result = value * font
-        elif unit in ('ex', 'en'):
-            # This is a hack for ex since we have no way to know
-            # the x-height of the font
-            result = value * font * 0.5
-        elif unit == 'pc':
-            result = value * 12.0
-        elif unit == 'mm':
-            result = value * 2.8346456693
-        elif unit == 'cm':
-            result = value * 28.346456693
-        elif unit == 'rem':
-            result = value * body_font_size
-        elif unit == 'q':
-            result = value * 0.708661417325
+            return value * 72.0 / dpi
+        except Exception:  # same as the original suppress(Exception) path
+            return original
+    result = value
+    if unit == '%':
+        result = (value / 100.0) * base
+    elif unit == 'px':
+        result = value * 72.0 / dpi
+    elif unit == 'in':
+        result = value * 72.0
+    elif unit == 'pt':
+        result = value
+    elif unit == 'em':
+        result = value * font
+    elif unit in ('ex', 'en'):
+        # This is a hack for ex since we have no way to know
+        # the x-height of the font
+        result = value * font * 0.5
+    elif unit == 'pc':
+        result = value * 12.0
+    elif unit == 'mm':
+        result = value * 2.8346456693
+    elif unit == 'cm':
+        result = value * 28.346456693
+    elif unit == 'rem':
+        result = value * body_font_size
+    elif unit == 'q':
+        result = value * 0.708661417325
     return result
 
 

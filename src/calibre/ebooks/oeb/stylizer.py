@@ -10,6 +10,7 @@ import numbers
 import os
 import re
 import unicodedata
+from functools import lru_cache
 from operator import itemgetter
 from typing import cast
 from weakref import WeakKeyDictionary
@@ -481,6 +482,10 @@ def is_svg_text_tag(x):
     return getattr(x, 'tag', '') in svg_text_tags
 
 
+_dom_name = lru_cache(maxsize=None)(cssproperties._toDOMname)
+_missing = object()
+
+
 class Style:
     MS_PAT = re.compile(r'^\s*(mso-|panose-|text-underline|tab-interval)')
     viewport_relative_font_size: str = ''
@@ -561,9 +566,9 @@ class Style:
         return self._stylizer.style(elem)
 
     def __getitem__(self, name):
-        domname = cssproperties._toDOMname(name)
-        if hasattr(self, domname):
-            return getattr(self, domname)
+        val = getattr(self, _dom_name(name), _missing)
+        if val is not _missing:
+            return val
         return self._unit_convert(self._get(name))
 
     def _get(self, name):

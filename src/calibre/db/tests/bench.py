@@ -1151,7 +1151,14 @@ class LibraryBenchSmokeTest(unittest.TestCase):
     num_books = 1000
 
     def test_generated_library(self):
+        from calibre.db.page_count import MaintainPageCounts
         from calibre.library.check_library import CheckLibrary
+
+        # open_legacy() disables page counting by replacing a method of the
+        # class, which would otherwise make every later test in this process
+        # (for e.g. WritingTest.test_composite_cache) wait forever for the
+        # page counting thread to process a queued book
+        self.addCleanup(setattr, MaintainPageCounts, 'queue_scan', MaintainPageCounts.queue_scan)
 
         tdir = tempfile.mkdtemp()
         try:

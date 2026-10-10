@@ -464,7 +464,7 @@ icu_Collator_startswith(icu_Collator *self, PyObject *const *args, Py_ssize_t na
     if (a == NULL) return NULL;
     b = python_to_icu(b_, &bsz);
     if (b == NULL) {
-        Py_DECREF(a);
+        free(a);
         return NULL;
     }
     PyObject *ans = Py_False;

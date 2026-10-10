@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2014, Kovid Goyal <kovid at kovidgoyal.net>
 
+import os
+import subprocess
 import sys
 import unittest
 from contextlib import contextmanager
@@ -17,6 +19,25 @@ def make_collation_func(name, locale, numeric=True, maker=icu.make_sort_key_func
         return ans
 
     yield maker(coll, func)
+
+
+def run_in_subprocess(code, timeout=120):
+    """
+    Run python code with the calibre modules and C extensions importable, in a
+    separate interpreter, so that a crash in a C extension (segfault, abort)
+    is reported as a failure of one test instead of killing the test runner.
+    Returns the CompletedProcess, with stdout and stderr as text.
+    """
+    import calibre
+
+    prelude = (
+        'import sys\n'
+        f'sys.path.insert(0, {os.path.dirname(os.path.dirname(os.path.abspath(calibre.__file__)))!r})\n'
+        f'sys.extensions_location = {sys.extensions_location!r}\n'
+        f'sys.resources_location = {sys.resources_location!r}\n'
+        'import calibre.constants\n'
+    )
+    return subprocess.run([sys.executable, '-c', prelude + code], capture_output=True, text=True, timeout=timeout)
 
 
 class TestICU(unittest.TestCase):
@@ -304,6 +325,41 @@ class TestICU(unittest.TestCase):
             dict(icu.partition_by_first_letter(['A1', '', 'a1', '\U0001f431', '\U0001f431x'])),
             {' ': [''], 'A': ['A1', 'a1'], '\U0001f431': ['\U0001f431', '\U0001f431x']},
         )
+
+    @unittest.skipIf(getattr(sys, 'frozen', False), 'The subprocess helper does not work in frozen builds')
+    def test_collator_argument_errors(self):
+        "Test that invalid arguments raise TypeError and do not corrupt memory"
+        # Run in a subprocess because the bug this tests for (freeing a malloc()ed
+        # buffer with Py_DECREF()) is only detectable as a crash. A string whose
+        # first 8 bytes in UTF-16 are the integer 1 makes Py_DECREF() call
+        # _Py_Dealloc() on the buffer.
+        code = r"""
+from calibre_extensions.icu import Collator
+c = Collator('en')
+bad = ((5, 'abc'), ('abc', 5), ('abc', None), ('\x01', 5), ('\x01', None), ('\x01', b'x'), (b'x', 'x'))
+for a, b in bad:
+    for name in ('startswith', 'strcmp', 'contains', 'find'):
+        try:
+            getattr(c, name)(a, b)
+        except TypeError:
+            pass
+        else:
+            raise SystemExit(f'{name}({a!r}, {b!r}) did not raise TypeError')
+try:
+    c.startswith('abc', 'a', 'x')
+except TypeError:
+    pass
+else:
+    raise SystemExit('startswith with a non-integer offset did not raise TypeError')
+for i in range(1000):
+    try:
+        c.startswith('\x01', 5)
+    except TypeError:
+        pass
+print('OK')
+"""
+        p = run_in_subprocess(code)
+        self.ae((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
 
     def test_roundtrip(self):
         "Test roundtripping"

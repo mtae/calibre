@@ -957,16 +957,15 @@ class CacheRecomputeTest(BaseTest):
         # renders composite columns for the changed books, before it discards vls_for_books_cache
         self.assert_same_as_fresh(cache, 'field_for', '#cvl', 2)
 
-    @unittest.expectedFailure
     def test_stale_search_after_saved_search_add(self):
-        "Redefining a saved search does not clear the cached results of searches that use it"
+        "Redefining a saved search clears the cached results of searches that use it"
         cache = self.init_cache()
         cache.saved_search_add('Mine', 'tags:true')
         self.assertEqual({1, 2}, cache.search('search:"=Mine"'))
         cache.saved_search_add('Mine', 'series:true and rating:>=3')
         self.assertEqual({1}, self.fresh(cache).search('search:"=Mine"'))
-        # Suspected cause: saved_search_add() (cache.py ~3455), unlike saved_search_set_all(),
-        # saved_search_delete() and saved_search_rename(), does not call clear_search_caches()
+        # Was: saved_search_add(), unlike saved_search_set_all(), saved_search_delete() and
+        # saved_search_rename(), did not call clear_search_caches()
         self.assert_same_as_fresh(cache, 'search', 'search:"=Mine"')
 
     def test_stale_custom_series_index(self):

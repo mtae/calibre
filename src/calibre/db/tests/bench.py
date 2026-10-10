@@ -46,9 +46,9 @@ import sys
 import tempfile
 import time
 import unittest
+from math import isnan
 
 THIS_FILE = os.path.abspath(__file__)
-
 
 
 def bootstrap_calibre():
@@ -117,7 +117,9 @@ FORMAT_WEIGHTS = (('EPUB', 60), ('MOBI', 15), ('PDF', 15), ('AZW3', 6), ('TXT', 
 LANGUAGES = (('eng', 70), ('deu', 6), ('fra', 5), ('spa', 4), ('rus', 4), ('jpn', 3), ('zho', 2), ('ita', 2), ('por', 1), ('pol', 1), ('ell', 1), ('ara', 1))
 DATE_FMT = '%Y-%m-%d %H:%M:%S+00:00'
 TINY_JPEG = (
-    b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00' + b'\x01' * 64 + b'\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4'
+    b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00'
+    + b'\x01' * 64
+    + b'\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4'
     b'\x00\x14\x00\x01' + b'\x00' * 15 + b'\n\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\xff\xd9'
 )  # Not necessarily a decodable image, the library never decodes covers when opening
 
@@ -378,27 +380,34 @@ def median(x):
     return statistics.median(x) if x else float('nan')
 
 
+def tick():
+    return time.perf_counter(), time.process_time()
+
+
 class Timer:
+    """Collects timings. Every timing is recorded as wall clock time and, under
+    the same name with an ``@cpu`` suffix, as the CPU time of the process
+    (all threads). The CPU time is much less sensitive to other processes
+    running on the machine, the wall time includes waiting for the disk."""
+
     def __init__(self):
         self.times = {}
 
+    def record(self, name, start, scale=1.0, accumulate=False):
+        wall, cpu = time.perf_counter() - start[0], time.process_time() - start[1]
+        if accumulate:
+            self.times[name] = self.times.get(name, 0) + wall / scale
+            self.times[name + '@cpu'] = self.times.get(name + '@cpu', 0) + cpu / scale
+        else:
+            self.times[name] = wall / scale
+            self.times[name + '@cpu'] = cpu / scale
+
     def measure(self, name, func, *args, **kw):
-        st = time.perf_counter()
-        ans = func(*args, **kw)
-        self.times[name] = time.perf_counter() - st
-        return ans
-
-    def __call__(self, name):
-        timer = self
-
-        class Ctx:
-            def __enter__(self):
-                self.st = time.perf_counter()
-
-            def __exit__(self, *a):
-                timer.times[name] = time.perf_counter() - self.st
-
-        return Ctx()
+        st = tick()
+        try:
+            return func(*args, **kw)
+        finally:
+            self.record(name, st)
 
 
 def rss_mb():
@@ -448,37 +457,37 @@ def open_cache(path, timer=None, patch_tables=True):
     if patch_tables:
 
         def read_table(self, table, read, *args):
-            st = time.perf_counter()
+            st = tick()
             try:
                 return orig_read_table(self, table, read, *args)
             finally:
-                timer.times['table.' + table.name] = timer.times.get('table.' + table.name, 0) + time.perf_counter() - st
+                timer.record('table.' + table.name, st, accumulate=True)
 
         def read_books_columns(db, columns):
-            st = time.perf_counter()
+            st = tick()
             try:
                 return orig_read_books_columns(db, columns)
             finally:
-                timer.times['table.<books table columns>'] = time.perf_counter() - st
+                timer.record('table.<books table columns>', st)
 
         DB._read_table = read_table
         backend_module.read_books_table_columns = read_books_columns
     orig_read_tables = DB.read_tables
 
     def read_tables(self):
-        st = time.perf_counter()
+        st = tick()
         try:
             return orig_read_tables(self)
         finally:
-            timer.times['read_tables'] = time.perf_counter() - st
+            timer.record('read_tables', st)
 
     DB.read_tables = read_tables
     try:
-        st = time.perf_counter()
+        st = tick()
         backend = timer.measure('DB()', DB, path)
         cache = Cache(backend)
         timer.measure('Cache.init', cache.init)
-        timer.times['open_total'] = time.perf_counter() - st
+        timer.record('open_total', st)
     finally:
         DB._read_table = orig_read_table
         DB.read_tables = orig_read_tables
@@ -495,27 +504,27 @@ def open_legacy(path, timer=None):
     orig_init = View.__init__
 
     def view_init(self, cache):
-        st = time.perf_counter()
+        st = tick()
         try:
             return orig_init(self, cache)
         finally:
-            timer.times['View()'] = time.perf_counter() - st
+            timer.record('View()', st)
 
     View.__init__ = view_init
     orig_cache_init = legacy.Cache.init
 
     def cache_init(self):
-        st = time.perf_counter()
+        st = tick()
         try:
             return orig_cache_init(self)
         finally:
-            timer.times['Cache.init'] = time.perf_counter() - st
+            timer.record('Cache.init', st)
 
     legacy.Cache.init = cache_init
     try:
-        st = time.perf_counter()
+        st = tick()
         db = legacy.LibraryDatabase(path)
-        timer.times['open_total'] = time.perf_counter() - st
+        timer.record('open_total', st)
     finally:
         View.__init__ = orig_init
         legacy.Cache.init = orig_cache_init
@@ -666,12 +675,12 @@ def bench_delete(path):
     ids = sorted(db.new_api.all_book_ids())[::7][:500]
     chunk_size = 100
     cc = CommitCounter(db.backend)
-    st = time.perf_counter()
+    st = tick()
     for i in range(0, len(ids), chunk_size):
         chunk = ids[i : i + chunk_size]
         db.new_api.remove_books(chunk, permanent=False)
         db.data.books_deleted(tuple(chunk))
-    t.times['delete_500_chunks'] = time.perf_counter() - st
+    t.record('delete_500_chunks', st)
     t.times['delete_500_commits'] = cc.count
     t.measure('commit_clean', lambda: (db.commit(), db.clean()))
     return t.times
@@ -686,10 +695,10 @@ def bench_set_tags(path):
     t.times['set_tags_1000_one_call_commits'] = cc.count
     ids2 = sorted(cache.all_book_ids())[1::3][:100]
     cc.count = 0
-    st = time.perf_counter()
+    st = tick()
     for b in ids2:
         cache.set_field('tags', {b: ('bench two',)})
-    t.times['set_tags_per_call_100_calls'] = (time.perf_counter() - st) / len(ids2)
+    t.record('set_tags_per_call_100_calls', st, scale=len(ids2))
     t.times['set_tags_per_call_commits'] = cc.count / len(ids2)
     return t.times
 
@@ -705,20 +714,20 @@ def bench_machine(path):
     try:
         conn = sqlite3.connect(os.path.join(d, 'x.db'), isolation_level=None)
         conn.execute('CREATE TABLE t(a)')
-        st = time.perf_counter()
+        st = tick()
         for i in range(100):
             conn.execute('INSERT INTO t VALUES (1)')
-        t.times['sqlite_commit_each'] = (time.perf_counter() - st) / 100
+        t.record('sqlite_commit_each', st, scale=100)
         conn.close()
-        st = time.perf_counter()
+        st = tick()
         for i in range(500):
             with open(os.path.join(d, f'f{i}'), 'wb') as f:
                 f.write(b'x' * 200)
-        t.times['create_small_file'] = (time.perf_counter() - st) / 500
-        st = time.perf_counter()
+        t.record('create_small_file', st, scale=500)
+        st = tick()
         for i in range(500):
             os.rename(os.path.join(d, f'f{i}'), os.path.join(d, f'g{i}'))
-        t.times['rename_file'] = (time.perf_counter() - st) / 500
+        t.record('rename_file', st, scale=500)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return t.times
@@ -791,13 +800,14 @@ def run_worker(name, libpath, workdir, timeout=3600, profile=None):
 
 
 def run_benchmarks(libs, bench_names, reps, workroot, out=print):
-    """Returns {lib: {bench: {key: [values over reps]}}}"""
-    results = {}
-    for lib in libs:
-        lib = os.path.abspath(lib)
-        results[lib] = {}
-        for rep in range(reps):
-            for name in bench_names:
+    """Returns {lib: {bench: {key: [values over reps]}}}. The libraries are
+    interleaved (for every repetition and benchmark each library in turn) so
+    that changes of the load of the machine affect all of them similarly."""
+    libs = [os.path.abspath(lib) for lib in libs]
+    results = {lib: {} for lib in libs}
+    for rep in range(reps):
+        for name in bench_names:
+            for lib in libs:
                 func, modifies, desc = BENCHMARKS[name]
                 workdir = os.path.join(workroot, 'work')
                 path = lib
@@ -809,13 +819,15 @@ def run_benchmarks(libs, bench_names, reps, workroot, out=print):
                 res = run_worker(name, path, workdir)
                 if modifies:
                     shutil.rmtree(path, ignore_errors=True)
-                out(f'  {os.path.basename(lib)} rep {rep + 1}/{reps} {name}: {time.monotonic() - st:.1f}s wall')
+                out(f'  rep {rep + 1}/{reps} {name} {os.path.basename(lib)}: {time.monotonic() - st:.1f}s wall (including setup)', flush=True)
                 for k, v in res.items():
                     results[lib].setdefault(name, {}).setdefault(k, []).append(v)
     return results
 
 
 def format_results(results, show_tables=True):
+    """A table of medians. Every timing is shown as wall time with the CPU time
+    of the process in parentheses, the ratio is that of the CPU time."""
     libs = list(results)
     sizes = {lib: _lib_size(lib) for lib in libs}
     header = ['benchmark.key'] + [f'{sizes[lib]} books' for lib in libs]
@@ -831,26 +843,29 @@ def format_results(results, show_tables=True):
         if bench not in keys:
             continue
         for k in keys[bench]:
-            if k.startswith('table.') and not show_tables:
+            if k.endswith('@cpu') or (k.startswith('table.') and not show_tables):
                 continue
             vals = [median(results[lib].get(bench, {}).get(k, [])) for lib in libs]
-            row = [f'{bench}.{k}'] + [_fmt(k, v) for v in vals]
+            cpus = [median(results[lib].get(bench, {}).get(k + '@cpu', [])) for lib in libs]
+            row = [f'{bench}.{k}'] + [_fmt(k, v, c) for v, c in zip(vals, cpus)]
             if len(libs) >= 2:
-                a, b = vals[0], vals[-1]
-                row.append(f'{b / a:.1f}x' if a and a == a and b == b else '')
+                a, b = (cpus[0], cpus[-1]) if not isnan(cpus[0]) else (vals[0], vals[-1])
+                row.append(f'{b / a:.1f}x' if a and not isnan(a) and not isnan(b) else '')
             rows.append(row)
     widths = [max(len(r[i]) for r in [header] + rows) for i in range(len(header))]
     lines = ['  '.join(c.ljust(w) if i == 0 else c.rjust(w) for i, (c, w) in enumerate(zip(r, widths))) for r in [header] + rows]
     return '\n'.join(lines)
 
 
-def _fmt(key, v):
-    if v != v:
+def _fmt(key, v, cpu=float('nan')):
+    if isnan(v):
         return '-'
-    if key in ('rss_mb',):
+    if key == 'rss_mb':
         return f'{v:.0f} MB'
     if key.endswith(('_books', 'commits')):
         return f'{v:.1f}' if v != int(v) else f'{v:.0f}'
+    if not isnan(cpu):
+        return f'{v:.3f}s ({cpu:.3f})'
     return f'{v:.3f}s'
 
 
@@ -888,7 +903,7 @@ def parse_importtime(stderr):
     return mods
 
 
-IMPORT_SNIPPET = """
+IMPORT_SNIPPET = '''
 import sys, os, time
 src, module = sys.argv[1], sys.argv[2]
 sys.path.insert(0, src)
@@ -904,7 +919,7 @@ calibre.ptempfile._base_dir = tdir
 import importlib
 importlib.import_module(module)
 print('IMPORT_WALL', time.perf_counter() - st)
-"""
+'''
 
 
 def import_package(name):
@@ -979,7 +994,7 @@ def gui_worker(libpath, profile=None):
     done, forces calibre's debug mode so that timed_print prints its
     checkpoints, and quits the event loop once startup is complete."""
     import calibre
-    import calibre.constants as constants
+    from calibre import constants
 
     constants.DEBUG = True
     from calibre.utils.config import dynamic
@@ -1127,7 +1142,6 @@ def main(argv=None):
         gui_worker(args.lib, args.profile)
 
 
-
 class LibraryBenchSmokeTest(unittest.TestCase):
     """Checks that the generator makes a valid library and that the opening
     and basic operations are not unreasonably slow on it. The limits are very
@@ -1137,7 +1151,6 @@ class LibraryBenchSmokeTest(unittest.TestCase):
     num_books = 1000
 
     def test_generated_library(self):
-        from calibre.db.legacy import LibraryDatabase
         from calibre.library.check_library import CheckLibrary
 
         tdir = tempfile.mkdtemp()
@@ -1151,7 +1164,20 @@ class LibraryBenchSmokeTest(unittest.TestCase):
                 self.assertEqual(len(cache.all_book_ids()), self.num_books)
                 checker = CheckLibrary(lib, db)
                 checker.scan_library([], [])
-                for attr in ('invalid_titles', 'extra_titles', 'invalid_authors', 'extra_authors', 'missing_formats', 'extra_formats', 'extra_files', 'missing_covers', 'extra_covers', 'malformed_formats', 'malformed_paths', 'failed_folders'):
+                for attr in (
+                    'invalid_titles',
+                    'extra_titles',
+                    'invalid_authors',
+                    'extra_authors',
+                    'missing_formats',
+                    'extra_formats',
+                    'extra_files',
+                    'missing_covers',
+                    'extra_covers',
+                    'malformed_formats',
+                    'malformed_paths',
+                    'failed_folders',
+                ):
                     self.assertFalse(getattr(checker, attr, None), attr)
                 st = time.perf_counter()
                 cache.multisort([('title', True), ('authors', True), ('series', True)])

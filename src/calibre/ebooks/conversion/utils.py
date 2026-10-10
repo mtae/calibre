@@ -568,7 +568,13 @@ class HeuristicProcessor:
         pre = re.compile(r'<pre>', re.IGNORECASE)
         if len(pre.findall(html)) >= 1:
             self.log.debug('Running Text Processing')
-            outerhtml = re.compile(r'.*?(?<=<pre>)(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
+            # Each match starts where the previous one ended (after a </pre>) or at the
+            # start of the document, so the lazy prefix of the old pattern is not needed.
+            # The atomic group keeps the first <pre> after that point: if no </pre> follows
+            # it, none follows a later <pre> either, so the backtracking this removes never
+            # found a match. The anchor stops every position inside an unclosed <pre> from
+            # scanning to the end of the document.
+            outerhtml = re.compile(r'(?:\A|(?<=</pre>))(?>.*?(?<=<pre>))(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
             html = outerhtml.sub(self.txt_process, html)
             from calibre.ebooks.conversion.preprocess import convert_entities
 
@@ -608,10 +614,16 @@ class HeuristicProcessor:
         html = re.sub(r'<p[^>/]*/>', '<p> </p>', html)
         # Get rid of empty span, bold, font, em, & italics tags
         fmt_tags = 'font|[ibu]|em|strong'
-        open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*)?>', f'</(?:{fmt_tags})>'
+        open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*+)?>', f'</(?:{fmt_tags})>'
+        # Each \s* here is followed by a tag, or ends the match, and tags start with <,
+        # so giving back whitespace never helps and \s*+ gives the same matches. A
+        # match starts at the start of a whitespace run (?<!\s), or at its end
+        # (?<=\s)(?!\s), where the previous match stopped after it consumed the run.
+        # Without these, every split of a run between the tags was tried, which is
+        # cubic on padded empty tags.
         for i in range(2):
-            html = re.sub(r'\s*<span[^>]*>\s*(<span[^>]*>\s*</span>){0,2}\s*</span>\s*', ' ', html)
-            html = re.sub(rf'\s*{open_fmt_pat}\s*({open_fmt_pat}\s*{close_fmt_pat}\s*){{0,2}}\s*{close_fmt_pat}', ' ', html)
+            html = re.sub(r'(?:(?<!\s)|(?<=\s)(?!\s))\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
+            html = re.sub(rf'(?:(?<!\s)|(?<=\s)(?!\s))\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
         # delete surrounding divs from empty paragraphs
         html = re.sub(r'<div[^>]*>\s*<p[^>]*>\s*</p>\s*</div>', '<p> </p>', html)
         # Empty heading tags
@@ -682,9 +694,13 @@ class HeuristicProcessor:
             r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
+        # Each \s* is followed by a tag (which starts with <) or by the content, so
+        # possessive \s*+ gives the same matches. The {1,} repeats stay greedy: with
+        # fewer repeats, the content can start at the last blank paragraph (an empty
+        # scene break), and that match must still be found.
         blanks_around_scene_breaks = re.compile(
-            r'(?P<initparas>(<(p|div)[^>]*>\s*</(p|div)>\s*){1,}\s*)?'
-            r'(?P<content><p class="scenebreak"[^>]*>.*?</p>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
+            r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
+            r'(?P<content><p class="scenebreak"[^>]*+>.*?</p>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
         blanks_n_nopunct = re.compile(

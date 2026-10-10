@@ -6,6 +6,8 @@ import os
 import re
 from urllib.parse import urlparse
 
+from lxml import etree
+
 from calibre.ebooks.oeb.base import OEB_DOCS, OPF, XHTML, XPNSMAP, XPath, barename
 from calibre.ebooks.oeb.polish.errors import MalformedMarkup
 from calibre.ebooks.oeb.polish.replace import LinkRebaser
@@ -139,6 +141,70 @@ def do_split(split_point, log, before=True):
     body2.text = '\n'
 
     return tree, tree2
+
+
+def do_split_inplace(tree, split_point, log, before=True):
+    """
+    Same result as :func:`do_split` but the cost is proportional to the size of
+    the part of the document before the split point, not to the size of the
+    whole document: ``tree`` is modified in place and becomes the *after* tree,
+    the content before the split point is moved (not copied) into a new
+    *before* tree. The returned trees serialize identically to those returned
+    by :func:`do_split`.
+
+    :return: (before_tree, tree) or None if the document has a shape this
+        function does not handle (in which case ``tree`` is not modified and
+        the caller should use :func:`do_split`).
+    """
+    if before:
+        split_point = adjust_split_point(split_point, log)
+    root = tree.getroot()
+    body = get_body(root)
+    if body is None or body.getparent() is not root or split_point is body or not isinstance(root.tag, str):
+        return None
+    chain = []  # ancestors of the split point from body down
+    e = split_point.getparent()
+    while e is not None and e is not body:
+        chain.append(e)
+        e = e.getparent()
+    if e is None:
+        return None
+    chain.append(body)
+    chain.reverse()
+    for a in chain:
+        if not isinstance(a.tag, str) or a.nsmap != a.getparent().nsmap:
+            return None
+
+    # Everything except the body, which is rebuilt below
+    idx, body_tail = root.index(body), body.tail
+    root.remove(body)
+    tree1 = copy.deepcopy(tree)
+    root.insert(idx, body)
+    body.tail = body_tail
+    parent1 = root1 = tree1.getroot()
+
+    for a, child in zip(chain, chain[1:] + [split_point]):
+        a1 = etree.Element(a.tag, dict(a.attrib), nsmap=a.nsmap)
+        if a is body:
+            root1.insert(idx, a1)
+        else:
+            parent1.append(a1)
+        a1.text, a1.tail = a.text, a.tail
+        for x in a[: a.index(child)]:
+            a1.append(x)
+        # Ancestors are kept in the after tree, without their text
+        a.text = '\n'
+        parent1 = a1
+    if not before:
+        # The split point and its descendants stay in the before tree
+        tail = split_point.tail
+        parent1.append(split_point)
+        split_point.tail = '\n'
+        # Keep the split point element's tail, if it contains non-whitespace text
+        # (do_split resets the text of body at the end, so it is lost there)
+        if tail and not tail.isspace() and chain[-1] is not body:
+            chain[-1].text += tail
+    return tree1, tree
 
 
 class SplitLinkReplacer:

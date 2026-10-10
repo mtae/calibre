@@ -397,6 +397,58 @@ class Structure(BaseTest):
         self.assertEqual(sheet.cssRules[1].cssRules[0].selectorText, f'p#{nid}, [id="{nid}"]')
         self.assertEqual(sheet.cssRules[2].selectorText, '#id_x')
 
+    def test_do_split_inplace(self):
+        # do_split_inplace() must give exactly the same trees as do_split()
+        import copy
+        import random
+
+        from lxml import etree
+
+        from calibre.ebooks.oeb.polish.split import do_split, do_split_inplace
+        from calibre.utils.logging import default_log
+
+        ns = 'http://www.w3.org/1999/xhtml'
+        texts = ['', None, ' ', '\n', 'txt ', ' words here', '\n\n  x ']
+        tags = ['div', 'p', 'span', 'h2', 'a', 'ul', 'li', 'table', 'td', 'i', 'pre', 'br']
+
+        def build(r):
+            def mk(parent, depth):
+                for _ in range(r.randint(0, 4 if depth < 5 else 1)):
+                    if r.random() < 0.1:
+                        c = etree.Comment('c')
+                        parent.append(c)
+                    else:
+                        c = etree.SubElement(parent, f'{{{ns}}}{r.choice(tags)}')
+                        c.text = r.choice(texts)
+                        mk(c, depth + 1)
+                    c.tail = r.choice(texts)
+
+            html = etree.Element(f'{{{ns}}}html', nsmap={None: ns})
+            etree.SubElement(etree.SubElement(html, f'{{{ns}}}head'), f'{{{ns}}}title').text = 'T'
+            body = etree.SubElement(html, f'{{{ns}}}body')
+            body.text = r.choice(texts)
+            mk(body, 0)
+            return etree.ElementTree(html)
+
+        def ser(t):
+            return etree.tostring(t, encoding='utf-8')
+
+        for seed in range(300):
+            r = random.Random(seed)
+            base = build(r)
+            elems = list(base.getroot().find(f'{{{ns}}}body').iterdescendants(f'{{{ns}}}*'))
+            if not elems:
+                continue
+            for before in (True, False):
+                path = base.getpath(r.choice(elems))
+                old = do_split(copy.deepcopy(base).xpath(path)[0], default_log, before=before)
+                t = copy.deepcopy(base)
+                new = do_split_inplace(t, t.xpath(path)[0], default_log, before=before)
+                self.assertIsNotNone(new)
+                self.assertIs(new[1], t)
+                for o, n in zip(old, new):
+                    self.assertEqual(ser(o), ser(n), f'seed={seed} before={before} path={path}')
+
 
 def find_tests():
     import unittest

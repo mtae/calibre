@@ -749,17 +749,9 @@ KNOWN_INCONSISTENT = known_table(
         'sql:insert into authors(name,sort) values (?,?)@1',
         'sql:update books set path=? where id=?@1',
     )),
-    ('create_book_entry', {'stray-cover'}, (
-        'file:backend.set_cover@1/after',
-        'sql:update books set has_cover=? where id=?@1',
-    )),
     # The note was written to the database but not its backup file
     ('import_note', {'note-backup-missing'}, (
         'file:notes.set_backup_for@1',
-    )),
-    # The cover file was written, but the book is not marked as having a cover
-    ('merge_book_metadata', {'stray-cover'}, (
-        'file:backend.set_cover@1/after',
     )),
     # As for create_book_entry, which it calls: the row is in the database but unknown to the cache, so the book cannot be restored again from the
     # trash, and a stray cover.jpg
@@ -774,10 +766,6 @@ KNOWN_INCONSISTENT = known_table(
         'sql:update books set has_cover=? where id=?@1',
     )),
     ('move_book_from_trash', {'composite-cache', 'field:formats', 'format-file-missing', 'formats', 'stray-cover'}, (
-        'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
-    )),
-    # The in-memory formats are updated before the row of the data table is written
-    ('move_format_from_trash', {'field:formats', 'format-file-missing', 'formats'}, (
         'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
     )),
     # Cleaning up the items that are no longer used (and their notes) is done after the books are removed, outside of the savepoint of each book,
@@ -881,14 +869,6 @@ KNOWN_INCONSISTENT = known_table(
     ('rename_items_tags_merge', {'composite-cache'}, (
         'sql:update books set last_modified=? where id=?@1',
     )),
-    # Moves the original over the format (not yet deferred, it is a method for D2), then deletes the original with remove_formats(). The
-    # add_format() and remove_formats() steps are units of work, if the second fails the original file is already moved
-    ('restore_original_format', {'composite-cache', 'format-file-missing', 'format-size'}, (
-        'file:atomic_rename@1/after',
-    )),
-    ('restore_original_format', {'format-file-missing'}, (
-        'sql:delete from data where book=? and format=?@1',
-    )),
     # The saved search is stored in memory before it is written to the preferences
     ('saved_search_add', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',
@@ -904,25 +884,6 @@ KNOWN_INCONSISTENT = known_table(
     )),
     ('set_authors', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
-    )),
-    # The cover file is written before has_cover is updated, and has_cover is rolled back with the last_modified of the book
-    ('set_cover_new', {'stray-cover'}, (
-        'file:backend.set_cover@1/after',
-        'sql:update books set has_cover=? where id=?@1',
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The cover file is deleted before has_cover is updated
-    ('set_cover_remove', {'cover-file-missing'}, (
-        'file:backend.set_cover@1/after',
-        'sql:update books set has_cover=? where id=?@1',
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The cover files of all the books are written before any has_cover is updated
-    ('set_cover_two_books', {'stray-cover'}, (
-        'file:backend.set_cover@1/after',
-        'file:backend.set_cover@2',
-        'sql:update books set has_cover=? where id=?@1',
-        'sql:update books set last_modified=? where id=?@1',
     )),
     # The in-memory tables are updated before the SQL statement is executed
     ('set_link_for_authors', {'items:authors'}, (

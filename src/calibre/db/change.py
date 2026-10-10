@@ -34,7 +34,10 @@ example a new format is copied to a temporary file) and finished from ``after_co
 with ``on_rollback()`` removing what was staged. The first callback that fails does not
 prevent the others from running, its exception is raised after all of them ran.
 
-Migrated so far: set_field, add_format and remove_formats. add_format stages the new contents in a
+Migrated so far: set_field, add_format, remove_formats, set_cover, restore_original_format and move_format_from_trash. set_cover
+stages each cover in a temporary file of the book folder (removing a cover is deferred) and replaces it from after_commit(), the cover
+caches are invalidated after that. restore_original_format moves the original file over the format from after_commit() (as
+add_format does with a staged file), move_format_from_trash moves the file out of the trash from after_commit(). add_format stages the new contents in a
 temporary file (removed by on_rollback()) and replaces the format file in an after_commit() callback;
 remove_formats moves the files to the trash from after_commit() and runs the post delete plugins and
 the formats_removed event there too. The formats table and the size table are re-read together on

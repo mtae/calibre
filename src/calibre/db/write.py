@@ -283,6 +283,51 @@ def safe_lower(x):
         return x
 
 
+def rid_map_for(table, kmap_is_lower):
+    """ The map of item (lowercased, if kmap_is_lower) values to ids of the
+    items of table. When possible this is the index maintained by the id_map
+    of the table, not a new dict, so that it is not built again for every
+    book written: callers must not modify it. """
+    id_map = table.id_map
+    if kmap_is_lower:
+        try:
+            return id_map.lower_index()
+        except AttributeError:
+            return {safe_lower(item): item_id for item_id, item in id_map.items()}
+    return {item: item_id for item_id, item in id_map.items()}
+
+
+def unused_items(table, candidates, full_scan):
+    """ The items of table that no book uses, as a dict of item id to value.
+    Looking at every item of the table is a cost proportional to the size of
+    the library for every book written, so unless full_scan is True only the
+    candidates (items that a write has just stopped using or has just created)
+    are looked at. """
+    cbm = table.col_book_map
+    id_map = table.id_map
+    if full_scan:
+        return {item_id: item_val for item_id, item_val in id_map.items() if not cbm.get(item_id, False)}
+    return {item_id: id_map[item_id] for item_id in candidates if item_id in id_map and not cbm.get(item_id, False)}
+
+
+def begin_unused_items_cleanup(table):
+    """ Returns whether the next cleanup of unused items has to look at all
+    the items of table. It does until one cleanup has completed, as unused
+    items can come from the database, or from a previous write that failed
+    part way, and are removed by the first write that completes. After that
+    the only way for an item to become unused is for a write to make it so
+    (writes that delete books or items remove the items they empty
+    themselves), which is why candidates are enough. Call
+    end_unused_items_cleanup() when the cleanup is complete. """
+    full_scan = getattr(table, 'unused_items_possible', True)
+    table.unused_items_possible = True
+    return full_scan
+
+
+def end_unused_items_cleanup(table):
+    table.unused_items_possible = False
+
+
 def get_db_id(val, db, m, table, kmap, rid_map, allow_case_change, case_changes, val_map, is_authors=False):
     """Get the db id for the value val. If val does not exist in the db it is
     inserted into the db."""
@@ -294,8 +339,10 @@ def get_db_id(val, db, m, table, kmap, rid_map, allow_case_change, case_changes,
             db.execute('INSERT INTO authors(name,sort) VALUES (?,?)', (val.replace(',', '|'), aus))
         else:
             db.execute('INSERT INTO {}({}) VALUES (?)'.format(m['table'], m['column']), (val,))
-        item_id = rid_map[kval] = db.last_insert_rowid()
+        item_id = db.last_insert_rowid()
+        # rid_map can be the index of table.id_map, which this updates
         table.id_map[item_id] = val
+        rid_map[kval] = item_id
         table.col_book_map[item_id] = set()
         if is_authors:
             table.asort_map[item_id] = aus
@@ -329,12 +376,13 @@ def many_one(book_id_val_map, db, field, allow_case_change, *args):
     is_custom_series = dt == 'series' and table.name.startswith('#')
 
     # Map values to db ids, including any new values
-    kmap = safe_lower if dt in {'text', 'series'} else lambda x: x
-    rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+    kmap_is_lower = dt in {'text', 'series'}
+    kmap = safe_lower if kmap_is_lower else lambda x: x
+    rid_map = rid_map_for(table, kmap_is_lower)
     if len(rid_map) != len(table.id_map):
         # table has some entries that differ only in case, fix it
         table.fix_case_duplicates(db)
-        rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+        rid_map = rid_map_for(table, kmap_is_lower)
     val_map = {None: None}
     case_changes = {}
     for val in book_id_val_map.values():
@@ -351,12 +399,15 @@ def many_one(book_id_val_map, db, field, allow_case_change, *args):
     dirtied |= set(book_id_item_id_map)
 
     # Update the book->col and col->book maps
+    full_scan = begin_unused_items_cleanup(table)
+    unused_candidates = dict.fromkeys(val_map.values())
     deleted = set()
     updated = {}
     for book_id, item_id in book_id_item_id_map.items():
         old_item_id = table.book_col_map.get(book_id, None)
         if old_item_id is not None:
             table.col_book_map[old_item_id].discard(book_id)
+            unused_candidates[old_item_id] = None
         if item_id is None:
             table.book_col_map.pop(book_id, None)
             deleted.add(book_id)
@@ -380,7 +431,7 @@ def many_one(book_id_val_map, db, field, allow_case_change, *args):
         )
 
     # Remove no longer used items
-    remove = {item_id: item_val for item_id, item_val in table.id_map.items() if not table.col_book_map.get(item_id, False)}
+    remove = unused_items(table, unused_candidates, full_scan)
     if remove:
         if table.supports_notes:
             db.clear_notes_for_category_items(table.name, remove)
@@ -388,6 +439,7 @@ def many_one(book_id_val_map, db, field, allow_case_change, *args):
         for item_id in remove:
             del table.id_map[item_id]
             table.col_book_map.pop(item_id, None)
+    end_unused_items_cleanup(table)
 
     return dirtied
 
@@ -415,12 +467,13 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
     is_authors = field.name == 'authors'
 
     # Map values to db ids, including any new values
-    kmap = safe_lower if dt == 'text' else lambda x: x
-    rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+    kmap_is_lower = dt == 'text'
+    kmap = safe_lower if kmap_is_lower else lambda x: x
+    rid_map = rid_map_for(table, kmap_is_lower)
     if len(rid_map) != len(table.id_map):
         # table has some entries that differ only in case, fix it
         table.fix_case_duplicates(db)
-        rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+        rid_map = rid_map_for(table, kmap_is_lower)
     val_map = {}
     case_changes = {}
     book_id_val_map = {k: uniq(vals, kmap) for k, vals in book_id_val_map.items()}
@@ -449,6 +502,8 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
     dirtied |= set(book_id_item_id_map)
 
     # Update the book->col and col->book maps
+    full_scan = begin_unused_items_cleanup(table)
+    unused_candidates = dict.fromkeys(val_map.values())
     deleted = set()
     updated = {}
     for book_id, item_ids in book_id_item_id_map.items():
@@ -456,6 +511,7 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
         if old_item_ids:
             for old_item_id in old_item_ids:
                 table.col_book_map[old_item_id].discard(book_id)
+                unused_candidates[old_item_id] = None
         if item_ids:
             table.book_col_map[book_id] = item_ids
             for item_id in item_ids:
@@ -477,7 +533,7 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
             field.author_sort_field.writer.set_books(aus_map, db)
 
     # Remove no longer used items
-    remove = {item_id: item_val for item_id, item_val in table.id_map.items() if not table.col_book_map.get(item_id, False)}
+    remove = unused_items(table, unused_candidates, full_scan)
     if remove:
         if table.supports_notes:
             db.clear_notes_for_category_items(table.name, remove)
@@ -489,6 +545,7 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
                 table.asort_map.pop(item_id, None)
             if hasattr(table, 'link_map'):
                 table.link_map.pop(item_id, None)
+    end_unused_items_cleanup(table)
     return dirtied
 
 

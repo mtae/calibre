@@ -2638,7 +2638,11 @@ class Cache:
         string."""
         table = self.fields['authors'].table
         result = []
-        rmap = {key_func(v): k for k, v in table.id_map.items()}
+        if key_func is icu_lower and hasattr(table.id_map, 'lower_index'):
+            # Maintained by the table, so it is not built for every call
+            rmap = table.id_map.lower_index()
+        else:
+            rmap = {key_func(v): k for k, v in table.id_map.items()}
         for aut in authors:
             aid = rmap.get(key_func(aut), None)
             result.append(author_to_author_sort(aut) if aid is None else table.asort_map[aid])

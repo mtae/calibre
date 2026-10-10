@@ -1635,11 +1635,24 @@ class Cache:
         except Exception:
             return False
         if self.backend.is_format_accessible(book_id, original_fmt, ofmt_name, path):
-            self.add_format(book_id, fmt, BytesIO(), run_hooks=False)
-            fmt_name = self.fields['formats'].format_fname(book_id, fmt)
-            file_size = self.backend.rename_format_file(book_id, ofmt_name, original_fmt, fmt_name, fmt, path)
-            self.fields['formats'].table.update_fmt(book_id, fmt, fmt_name, file_size, self.backend)
-            self._remove_formats({book_id: (original_fmt,)})
+            ofmt_path = self.backend.format_abspath(book_id, original_fmt, ofmt_name, path)
+            try:
+                name = self.fields['formats'].format_fname(book_id, fmt)
+            except Exception:
+                name = None
+            self.format_metadata_cache[book_id].pop(fmt, None)
+            self.format_metadata_cache[book_id].pop(original_fmt, None)
+            with self._change() as change:
+                change.modifies(self.fields['last_modified'].table)
+                # The original file is moved over the format (renaming the existing file to the name of the format first, as add_format() does)
+                # only after the rows are committed, so that a failure leaves both files where they were
+                size, fname = self._do_add_format(book_id, fmt, ofmt_path, name, change=change)
+                self._record_format_added(book_id, fmt, fname, size, change)
+                self._update_last_modified((book_id,))
+                self._queue_pages_scan(book_id)
+                change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
+                # The file of the original format was moved above, so only its record is removed
+                self._remove_formats({book_id: (original_fmt,)}, db_only=True)
             return True
         return False
 
@@ -2359,17 +2372,23 @@ class Cache:
         QPixmap, file object or bytestring. It can also be None, in which
         case any existing cover is removed."""
 
-        for book_id, data in book_id_data_map.items():
-            try:
-                path = self._get_book_path(book_id)
-            except KeyError, AttributeError:
-                self._update_path((book_id,))
-                path = self._get_book_path(book_id)
+        with self._change() as change:
+            # The cover files are staged and only replaced (or removed) after has_cover is committed
+            for book_id, data in book_id_data_map.items():
+                try:
+                    path = self._get_book_path(book_id)
+                except KeyError, AttributeError:
+                    self._update_path((book_id,))
+                    path = self._get_book_path(book_id)
 
-            self.backend.set_cover(book_id, path, data)
+                self.backend.set_cover(book_id, path, data, change=change)
+            # After the cover files were replaced
+            change.after_commit(partial(self._invalidate_cover_caches, tuple(book_id_data_map)))
+            return self._set_field('cover', {book_id: (0 if data is None else 1) for book_id, data in book_id_data_map.items()})
+
+    def _invalidate_cover_caches(self, book_ids):
         for cc in self.cover_caches:
-            cc.invalidate(book_id_data_map)
-        return self._set_field('cover', {book_id: (0 if data is None else 1) for book_id, data in book_id_data_map.items()})
+            cc.invalidate(book_ids)
 
     _set_cover = set_cover
 
@@ -3675,7 +3694,6 @@ class Cache:
 
     _copy_format_from_trash = copy_format_from_trash
 
-    # Changes only the formats and size of the book, which _record_format_added() reports
     @quiet_write_api
     def move_format_from_trash(self, book_id, fmt):
         """Undelete a format from the trash directory"""
@@ -3689,17 +3707,19 @@ class Cache:
         fpath = self.backend.path_for_trash_format(book_id, fmt)
         if not fpath:
             raise ValueError(f'No format {fmt} found in book {book_id}')
-        size, fname = self._do_add_format(book_id, fmt, fpath, name)
         self.format_metadata_cache.pop(book_id, None)
-        self._record_format_added(book_id, fmt, fname, size)
-        # Composite columns (and searches) that use the formats of the book are stale now. Unlike add_format() this does not change the
-        # last modified time of the book
-        if self.composites:
-            self._clear_composite_caches((book_id,))
-        self._clear_search_caches((book_id,))
-        self._queue_pages_scan(book_id)
-        self.event_dispatcher(EventType.format_added, book_id, fmt)
-        self.backend.remove_trash_formats_dir_if_empty(book_id)
+        with self._change() as change:
+            # The file is moved out of the trash only after the row is committed
+            size, fname = self._do_add_format(book_id, fmt, fpath, name, change=change)
+            self._record_format_added(book_id, fmt, fname, size, change)
+            # Composite columns (and searches) that use the formats of the book are stale now. Unlike add_format() this does not change the
+            # last modified time of the book
+            if self.composites:
+                self._clear_composite_caches((book_id,))
+            self._clear_search_caches((book_id,))
+            self._queue_pages_scan(book_id)
+            change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
+            change.after_commit(partial(self.backend.remove_trash_formats_dir_if_empty, book_id))
 
     _move_format_from_trash = move_format_from_trash
 

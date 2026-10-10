@@ -2617,17 +2617,49 @@ class DB:
         return books, files
 
     def remove_books(self, path_map, permanent=False):
+        """
+        Remove the books in path_map (a mapping of book id to the path of the
+        book folder relative to the library). Every book is removed
+        independently of the others: the deletion of its row in the database
+        and the removal (or moving to the trash) of its files either both
+        succeed or both fail, so a book that cannot be removed is left
+        untouched and the other books are still removed.
+
+        :return: A dict mapping the ids of books that could not be removed to a string containing the traceback of the error
+        """
+        import traceback
+
         self.ensure_trash_dir()
-        self.executemany('DELETE FROM books WHERE id=?', [(x,) for x in path_map])
+        failures = {}
         parent_paths = set()
-        for book_id, path in path_map.items():
-            if path:
-                path = os.path.abspath(os.path.join(self.library_path, path))
-                if os.path.exists(path) and self.is_deletable(path):
-                    self.rmtree(path) if permanent else self.move_book_to_trash(book_id, path)
-                    parent_paths.add(os.path.dirname(path))
+        # Everything is done in a single transaction, with a savepoint for
+        # every book. The row of a book is deleted first and then its files
+        # are moved. If deleting the row fails, the files are not touched and
+        # if moving the files fails the savepoint is rolled back, restoring
+        # the row, so a row and the files of its book are removed together or
+        # not at all. The inconsistency that can remain is limited to:
+        #  * A failure of the final COMMIT after the files were moved: the
+        #    rows of all the books are restored but their files are gone from
+        #    their folders (they are in the trash, unless permanent is True).
+        #  * A failure part way through moving or deleting the files of a
+        #    single book: that book is kept, but some of its files may
+        #    already be gone from its folder (a complete copy is in the trash
+        #    if the failure happened while deleting the original folder).
+        with self.conn:
+            for book_id, path in path_map.items():
+                try:
+                    with self.conn:
+                        self.execute('DELETE FROM books WHERE id=?', (book_id,))
+                        if path:
+                            path = os.path.abspath(os.path.join(self.library_path, path))
+                            if os.path.exists(path) and self.is_deletable(path):
+                                self.rmtree(path) if permanent else self.move_book_to_trash(book_id, path)
+                                parent_paths.add(os.path.dirname(path))
+                except Exception:
+                    failures[book_id] = traceback.format_exc()
         for path in parent_paths:
             remove_dir_if_empty(path, ignore_metadata_caches=True)
+        return failures
 
     def add_custom_data(self, name, val_map, delete_first):
         if delete_first:

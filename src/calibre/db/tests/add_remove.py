@@ -490,6 +490,134 @@ class AddRemoveTest(BaseTest):
 
     # }}}
 
+    def test_remove_books_failures(self):  # {{{
+        "Test that removing books leaves the library consistent when some books cannot be removed"
+        from calibre.db.errors import BooksNotRemoved
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        base_library = self.library_path
+        position_map = {'first': (0,), 'middle': (2,), 'last': (4,), 'all': (0, 1, 2, 3, 4)}
+
+        def make_books(cache):
+            ids = []
+            for i in range(5):
+                mi = Metadata(f'Failure Test {i}', [f'Failure Author {i}'])
+                book_id = cache.create_book_entry(mi, cover=IMG)
+                cache.add_format(book_id, 'FMT1', BytesIO(f'fmt1 data {i}'.encode()))
+                cache.add_format(book_id, 'FMT2', BytesIO(f'fmt2 data {i}'.encode()))
+                ids.append(book_id)
+            return ids
+
+        def check(permanent, bad_positions, inject, restore):
+            cache = self.init_cache(self.clone_library(base_library))
+            backend = cache.backend
+            ids = make_books(cache)
+            bad = {ids[i] for i in bad_positions}
+            good = [x for x in ids if x not in bad]
+            formats_before = {x: {f: cache.format(x, f) for f in ('FMT1', 'FMT2')} for x in ids}
+            self.assert_library_consistent(cache)
+            before = self.collect_book_files(cache)
+            events = []
+
+            class Recorder:
+                def __init__(self, dispatcher):
+                    self.dispatcher = dispatcher
+
+                def __call__(self, event_type, *args):
+                    events.append((event_type.name, args))
+                    return self.dispatcher(event_type, *args)
+
+                def __getattr__(self, name):
+                    return getattr(self.dispatcher, name)
+
+            cache.event_dispatcher = Recorder(cache.event_dispatcher)
+            restore_injection = inject(cache, bad)
+            try:
+                with self.assertRaises(BooksNotRemoved) as cm:
+                    cache.remove_books(ids, permanent=permanent)
+            finally:
+                restore_injection()
+            err = cm.exception
+            self.assertEqual(set(err.failures), bad)
+            self.assertIn('injected failure', ''.join(err.failures.values()))
+            self.assertEqual(set(err.removed), set(good))
+            # Events are sent only for the books that were really removed
+            removed_events = [set(args[0]) for name, args in events if name == 'books_removed']
+            self.assertEqual(removed_events, [set(good)] if good else [])
+
+            self.assert_library_consistent(cache)
+            self.assertEqual(set(cache.all_book_ids()) & set(ids), bad)
+            if permanent:
+                after = self.collect_book_files(cache)
+                self.assertFalse({x for x in after if x[0] in good}, 'Files of removed books remain')
+                self.assertEqual({x for x in after if x[0] in bad}, {x for x in before if x[0] in bad})
+            else:
+                self.assert_files_conserved(before, cache)
+                self.assertEqual({x.book_id for x in cache.list_trash_entries()[0]}, set(good))
+            for book_id in bad:
+                for f in ('FMT1', 'FMT2'):
+                    self.assertEqual(cache.format(book_id, f), formats_before[book_id][f])
+                self.assertEqual(cache.cover(book_id), IMG)
+
+            # Now that the problem is gone, the rest can be removed
+            if bad:
+                cache.remove_books(sorted(bad), permanent=permanent)
+            self.assertFalse(set(cache.all_book_ids()) & set(ids))
+            self.assert_library_consistent(cache)
+            if not permanent:
+                self.assert_files_conserved(before, cache)
+                if restore:
+                    book_id = good[-1] if good else sorted(bad)[-1]
+                    cache.move_book_from_trash(book_id)
+                    self.assertIn(book_id, cache.all_book_ids())
+                    for f in ('FMT1', 'FMT2'):
+                        self.assertEqual(cache.format(book_id, f), formats_before[book_id][f])
+                    self.assertEqual(cache.cover(book_id), IMG)
+                    self.assert_library_consistent(cache)
+                    self.assert_files_conserved(before, cache)
+
+        def inject_file_failure(permanent):
+            def inject(cache, bad):
+                backend = cache.backend
+                name = 'rmtree' if permanent else 'move_book_to_trash'
+                orig = getattr(backend, name)
+                bad_dirs = {os.path.dirname(cache.format_abspath(x, 'FMT1')) for x in bad}
+                bad_paths = {os.path.abspath(x) for x in bad_dirs}
+
+                def failing(*args):
+                    path = args[-1]
+                    if os.path.abspath(path) in bad_paths:
+                        raise OSError('injected failure: simulated locked file')
+                    return orig(*args)
+
+                setattr(backend, name, failing)
+                return lambda: setattr(backend, name, orig)
+
+            return inject
+
+        def inject_sql_failure(cache, bad):
+            conn = cache.backend.conn
+            for book_id in bad:
+                conn.cursor().execute(
+                    f"CREATE TEMP TRIGGER inject_failure_{book_id} BEFORE DELETE ON books WHEN old.id={book_id} "
+                    "BEGIN SELECT RAISE(ABORT, 'injected failure: simulated sql error'); END"
+                )
+
+            def restore():
+                for book_id in bad:
+                    conn.cursor().execute(f'DROP TRIGGER temp.inject_failure_{book_id}')
+
+            return restore
+
+        for permanent in (False, True):
+            for position, bad_positions in position_map.items():
+                with self.subTest(permanent=permanent, failing=position, kind='files'):
+                    check(permanent, bad_positions, inject_file_failure(permanent), restore=position == 'middle')
+            with self.subTest(permanent=permanent, failing='middle', kind='sql'):
+                check(permanent, position_map['middle'], inject_sql_failure, restore=True)
+
+    # }}}
+
     def test_original_fmt(self):  # {{{
         "Test management of original fmt"
         af, ae, at = self.assertFalse, self.assertEqual, self.assertTrue

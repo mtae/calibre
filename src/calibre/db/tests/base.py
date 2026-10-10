@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import datetime
 from functools import partial
 from io import BytesIO
 
@@ -78,6 +79,144 @@ class BaseTest(unittest.TestCase):
         cache.init()
         self.objects_to_close.append(cache)
         return cache
+
+    def assert_library_consistent(self, cache):
+        """
+        Check that the library on disk is consistent with the in-memory state
+        of the specified Cache. Meant to be called by any test that modifies
+        the library, after the modification, particularly after an operation
+        that failed. It checks that:
+
+        * A fresh Cache opened on the library from disk has exactly the same
+          books, and the same value for every field of every book, same
+          formats and same cover flag, as the live cache. Which means that
+          the database and the in-memory state agree.
+        * The folder, the listed format files and the cover of every book
+          exist on disk.
+        * There are no orphaned book folders, folders that do not belong to
+          any book in the database.
+        """
+        import re
+
+        from calibre.db.backend import DB
+        from calibre.db.cache import Cache
+        from calibre.db.constants import COVER_FILE_NAME, NOTES_DIR_NAME, TRASH_DIR_NAME
+
+        def normalize(x):
+            # The in-memory timestamps of newly created books have a
+            # microsecond part that is not stored in the database
+            return x.replace(microsecond=0) if isinstance(x, datetime) else x
+
+        library_path = cache.backend.library_path
+        # Hold the write lock so that the background threads of the live
+        # cache, such as the one that counts pages, do not use the database
+        # while the new connection is being set up
+        with cache.quiet_write_lock:
+            fresh = Cache(DB(library_path))
+            fresh.init()
+        try:
+            ids = set(cache.all_book_ids())
+            self.assertEqual(ids, set(fresh.all_book_ids()), 'The in-memory book ids differ from those in the database')
+            for field in sorted(cache.fields):
+                # ondevice is computed from the device, pages is -1 in memory
+                # for a book that is queued for a pages scan, 0 in the database
+                if field in ('ondevice', 'pages'):
+                    continue
+                for book_id in sorted(ids):
+                    self.assertEqual(
+                        normalize(cache.field_for(field, book_id)),
+                        normalize(fresh.field_for(field, book_id)),
+                        f'The field {field} of book {book_id} differs between the in-memory state and the database',
+                    )
+            for book_id in sorted(ids):
+                formats = cache.formats(book_id, verify_formats=False)
+                self.assertEqual(formats, fresh.formats(book_id, verify_formats=False), f'Formats of book {book_id} differ')
+                has_cover = bool(cache.field_for('cover', book_id))
+                path = cache.field_for('path', book_id)
+                bdir = os.path.join(library_path, *path.split('/')) if path else ''
+                if formats or has_cover:
+                    self.assertTrue(bdir and os.path.isdir(bdir), f'The folder of book {book_id} is missing: {bdir!r}')
+                for fmt in formats:
+                    fpath = cache.format_abspath(book_id, fmt)
+                    self.assertTrue(fpath and os.path.exists(fpath), f'The {fmt} file of book {book_id} is missing from the disk')
+                    self.assertTrue(
+                        os.path.exists(fresh.format_abspath(book_id, fmt) or ''), f'The {fmt} file of book {book_id} is missing from the disk'
+                    )
+                if has_cover:
+                    self.assertTrue(os.path.exists(os.path.join(bdir, COVER_FILE_NAME)), f'The cover of book {book_id} is missing from the disk')
+            # Orphaned folders
+            expected = {os.path.join(*cache.field_for('path', x).split('/')) for x in ids if cache.field_for('path', x)}
+            pat = re.compile(r'\((\d+)\)$')
+            found = set()
+            for author in os.listdir(library_path):
+                apath = os.path.join(library_path, author)
+                if author in (TRASH_DIR_NAME, NOTES_DIR_NAME) or not os.path.isdir(apath):
+                    continue
+                children = os.listdir(apath)
+                self.assertTrue(children, f'Orphaned empty author folder: {author!r}')
+                for title in children:
+                    rel = os.path.join(author, title)
+                    m = pat.search(title)
+                    self.assertTrue(m is not None and os.path.isdir(os.path.join(library_path, rel)), f'Unexpected item in the library: {rel!r}')
+                    found.add(rel)
+            orphans = found - expected
+            self.assertFalse(orphans, f'Orphaned book folders (no matching book in the database): {sorted(orphans)}')
+        finally:
+            fresh.close()
+
+    def collect_book_files(self, cache):
+        """
+        Return the set of (book_id, name) for every format file and cover that
+        exists anywhere in the library, either in a book folder or in the
+        trash, whether or not the book is in the database. name is the upper
+        cased format or COVER. Use with :meth:`assert_files_conserved`.
+        """
+        import re
+
+        from calibre.db.constants import COVER_FILE_NAME, METADATA_FILE_NAME, TRASH_DIR_NAME
+
+        library_path = cache.backend.library_path
+        ans = set()
+        pat = re.compile(r'\((\d+)\)$')
+
+        def add_dir(book_id, path):
+            for x in os.listdir(path):
+                if x == COVER_FILE_NAME:
+                    ans.add((book_id, 'COVER'))
+                elif x != METADATA_FILE_NAME and os.path.isfile(os.path.join(path, x)) and '.' in x:
+                    ans.add((book_id, x.rpartition('.')[2].upper()))
+
+        for author in os.listdir(library_path):
+            apath = os.path.join(library_path, author)
+            if author.startswith('.') or not os.path.isdir(apath):
+                continue
+            for title in os.listdir(apath):
+                m = pat.search(title)
+                if m is not None and os.path.isdir(os.path.join(apath, title)):
+                    add_dir(int(m.group(1)), os.path.join(apath, title))
+        trash = os.path.join(library_path, TRASH_DIR_NAME)
+        for sub in ('b', 'f'):
+            base = os.path.join(trash, sub)
+            if os.path.isdir(base):
+                for book_id in os.listdir(base):
+                    if book_id.isdigit() and os.path.isdir(os.path.join(base, book_id)):
+                        if sub == 'b':
+                            add_dir(int(book_id), os.path.join(base, book_id))
+                        else:
+                            for x in os.listdir(os.path.join(base, book_id)):
+                                if x != 'metadata.json':
+                                    ans.add((int(book_id), x.upper()))
+        return ans
+
+    def assert_files_conserved(self, before, cache, expected_lost=()):
+        """
+        Assert that no format file or cover was lost since the files were
+        collected using :meth:`collect_book_files`, other than the specified
+        expected_lost (an iterable of (book_id, name)).
+        """
+        after = self.collect_book_files(cache)
+        lost = before - after - set(expected_lost)
+        self.assertFalse(lost, f'Files were lost: {sorted(lost)}')
 
     def mkdtemp(self):
         ans = tempfile.mkdtemp(prefix='db_test_')

@@ -7,6 +7,7 @@ from functools import partial
 from qt.core import QDialog, QModelIndex, QObject, QTimer
 
 from calibre.constants import ismacos
+from calibre.db.errors import BooksNotRemoved
 from calibre.gui2 import Aborted, error_dialog
 from calibre.gui2.actions import InterfaceActionWithLibraryDrop
 from calibre.gui2.dialogs.confirm_delete import confirm
@@ -52,21 +53,23 @@ class MultiDeleter(QObject):  # {{{
             return
         chunk = [self.ids.pop() for _ in range(min(self.chunk_size, len(self.ids)))]
         db = self.model.db
-        # Remove the books one at a time so that we know exactly which book
-        # failed. Do not retry a book after a failure: a failed remove_books()
-        # call can leave the books that were earlier in that call partially
-        # removed (their files already in the trash), so calling it again for
-        # them would overwrite the trashed copies with empty folders.
-        import traceback
+        try:
+            db.new_api.remove_books(chunk, permanent=False)
+        except BooksNotRemoved as e:
+            # The books that could not be removed are left untouched, so there
+            # is nothing to retry, just report them
+            deleted = list(e.removed)
+            for book_id, tb in e.failures.items():
+                self.failures.append((book_id, self.title_for(book_id), tb))
+        except Exception:
+            import traceback
 
-        deleted = []
-        for book_id in chunk:
-            try:
-                db.new_api.remove_books((book_id,), permanent=False)
-            except Exception:
-                self.failures.append((book_id, self.title_for(book_id), traceback.format_exc()))
-            else:
-                deleted.append(book_id)
+            tb = traceback.format_exc()
+            deleted = []
+            for book_id in chunk:
+                self.failures.append((book_id, self.title_for(book_id), tb))
+        else:
+            deleted = chunk
         if deleted:
             db.data.books_deleted(tuple(deleted))
             self.deleted_ids.extend(deleted)

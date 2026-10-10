@@ -3,6 +3,7 @@
 
 from calibre.constants import trash_name
 from calibre.db.cli import integers_from_string
+from calibre.db.errors import BooksNotRemoved
 from calibre.srv.changes import books_deleted
 from calibre.utils.localization import _
 
@@ -11,7 +12,14 @@ version = 0  # change this if you change signature of implementation()
 
 
 def implementation(db, notify_changes, ids, permanent):
-    db.remove_books(ids, permanent=permanent)
+    try:
+        db.remove_books(ids, permanent=permanent)
+    except BooksNotRemoved as e:
+        # Some books were removed, make sure that anything watching the
+        # library, such as the calibre GUI, knows about them
+        if e.removed and notify_changes is not None:
+            notify_changes(books_deleted(e.removed))
+        raise
     if notify_changes is not None:
         notify_changes(books_deleted(ids))
 

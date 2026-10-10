@@ -6,7 +6,7 @@ import os
 import shutil
 import time
 from collections import defaultdict
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from itertools import count, repeat
 
 import apsw
@@ -63,6 +63,7 @@ class Notes:
 
     def __init__(self, backend):
         self.temp_table_counter = count()
+        self.deferred_file_ops = None
         conn = backend.get_connection()
         libdir = os.path.dirname(os.path.abspath(conn.db_filename('main')))
         self.notes_dir = os.path.join(libdir, NOTES_DIR_NAME)
@@ -141,6 +142,38 @@ class Notes:
         prefix = digest[:2]
         # Can't use colons in filenames on windows safely
         return os.path.join(self.resources_dir, prefix, f'{hashalg}-{digest}')
+
+    def do_file_operation(self, func, *args):
+        # Run func(*args) now, or when the enclosing deferred_file_operations() succeeds
+        if self.deferred_file_ops is None:
+            func(*args)
+        else:
+            self.deferred_file_ops.append((func, args))
+
+    @contextmanager
+    def deferred_file_operations(self):
+        """
+        Retiring a note (moving its backup file to the retired directory and removing the resource files that nothing else uses)
+        cannot be undone. When it is done as part of a database transaction that is later rolled back, the note is still in the
+        database but its files are gone. Inside this context manager these operations are queued, and run only if the context exits
+        without an exception, so wrap it around the transaction. Failures to run the queued operations are printed and ignored: the
+        transaction was already committed so all that is left behind are unused files.
+        """
+        if self.deferred_file_ops is not None:  # nested, the outermost one runs the operations
+            yield
+            return
+        self.deferred_file_ops = ops = []
+        try:
+            yield
+        finally:
+            self.deferred_file_ops = None
+        for func, args in ops:
+            try:
+                func(*args)
+            except Exception:
+                import traceback
+
+                traceback.print_exc()
 
     def remove_resources(self, conn, note_id, resources_to_potentially_remove, delete_from_link_table=True):
         if not isinstance(resources_to_potentially_remove, tuple):
@@ -269,9 +302,9 @@ class Notes:
                         'SELECT hash,name FROM notes_db.resources WHERE hash IN ({})'.format(','.join(repeat('?', len(old_resources)))),
                         tuple(old_resources),
                     )
-                self.retire_entry(field_name, item_id, item_value, resources, note_id)
+                self.do_file_operation(self.retire_entry, field_name, item_id, item_value, resources, note_id)
                 if old_resources:
-                    self.remove_resources(conn, note_id, old_resources, delete_from_link_table=False)
+                    self.do_file_operation(self.remove_resources, conn, note_id, old_resources, False)
             return -1
         new_resources = frozenset(used_resource_hashes)
         resources_to_potentially_remove = old_resources - new_resources

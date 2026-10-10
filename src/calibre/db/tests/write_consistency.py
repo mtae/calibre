@@ -743,10 +743,6 @@ CASES = (
 # the case, the kinds of problems (see BaseTest.find_library_inconsistencies(), lost-file is data loss) and
 # the faults after which they are found. The fault ids are described in fault_injection.py
 KNOWN_INCONSISTENT = known_table(
-    # The note was written to the database but not its backup file
-    ('import_note', {'note-backup-missing'}, (
-        'file:notes.set_backup_for@1',
-    )),
     # A stray cover.jpg is left
     ('move_book_from_trash', {'stray-cover'}, (
         'file:copy_tree@1/after',
@@ -890,11 +886,6 @@ KNOWN_INCONSISTENT = known_table(
         'file:copier.delete_sources@1',
         'file:remove_dir_if_empty@1',
     )),
-    # The note is written in several steps that are not in a transaction, the backup file is written last
-    ('set_notes_new', {'note-backup-missing'}, (
-        'sql:insert into notes_db.notes_resources_link (note,resource) values (?,?);@1',
-        'file:notes.set_backup_for@1',
-    )),
     # The in-memory tables are updated before the SQL statement is executed
     ('set_sort_for_authors', {'items:authors'}, (
         'sql:update authors set sort=? where id=?@1',
@@ -913,11 +904,6 @@ KNOWN_INCONSISTENT = known_table(
     ('set_title_two_books', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
         'sql:update books set path=? where id=?@2',
-    )),
-    # The note is restored in several steps that are not in a transaction, the backup file is written last
-    ('unretire_note_for', {'note-backup-missing'}, (
-        'sql:insert into notes_db.notes_resources_link (note,resource) values (?,?);@1',
-        'file:notes.set_backup_for@1',
     )),
     # The folder of the book is copied to the new name, the sources deleted, and only then are the rows of the data and books tables updated
     ('update_path', {'composite-cache', 'folder-missing', 'orphan-folder'}, (

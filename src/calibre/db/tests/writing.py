@@ -1241,3 +1241,79 @@ class WritingTest(BaseTest):
         self.assertEqual({}, cache.get_all_link_maps_for_book(1), 'Not all links for book were deleted')
 
     # }}}
+
+    def test_id_map_lower_index(self):  # {{{
+        # The lowercase index of IdMap must always equal one built from scratch,
+        # whichever way the map was changed
+        import random
+
+        from calibre.db.tables import IdMap, _safe_lower
+        rnd = random.Random(7)
+        names = ['a', 'A', 'b', 'B', 'Ünï', 'ünï', 'ÜNÏ', 'x y', 'X Y', 'z']
+        m = IdMap()
+        history = []
+        for step in range(400):
+            op = rnd.choice(('set', 'set', 'set', 'pop', 'del', 'update', 'setdefault', 'popitem', 'clear', 'lookup'))
+            key = rnd.randint(1, 12)
+            history.append((op, key))
+            if op == 'set':
+                m[key] = rnd.choice(names)
+            elif op == 'pop':
+                m.pop(key, None)
+            elif op == 'del':
+                if key in m:
+                    del m[key]
+            elif op == 'update':
+                m.update({key: rnd.choice(names), key + 1: rnd.choice(names)})
+            elif op == 'setdefault':
+                m.setdefault(key, rnd.choice(names))
+            elif op == 'popitem':
+                if m:
+                    m.popitem()
+            elif op == 'clear' and rnd.random() < 0.2:
+                m.clear()
+            expected = {_safe_lower(v): k for k, v in m.items()}
+            if op == 'lookup' or rnd.random() < 0.5:
+                self.assertEqual(expected, m.lower_index(), f'index differs from rebuilt index at step {step} after {history[-5:]}')
+        self.assertIs(type(m.copy()), dict)
+        self.assertEqual(dict(m), m)
+    # }}}
+
+    def test_unused_items_removed_by_next_write(self):  # {{{
+        # Items nobody uses are removed by the first write to the field, whether
+        # they came from the database or from a write that failed part way,
+        # and later writes only need to look at the items they touch
+        cache = self.init_cache()
+        conn = cache.backend.conn
+        for name in ('orphan1', 'orphan2'):
+            conn.execute('INSERT INTO tags (name) VALUES (?)', (name,))
+        cache.reload_from_db()
+        t = cache.fields['tags'].table
+        self.assertEqual({'orphan1', 'orphan2'}, {v for v in t.id_map.values() if v.startswith('orphan')})
+        cache.set_field('tags', {1: 'newtag'})
+        self.assertFalse([v for v in t.id_map.values() if v.startswith('orphan')], 'unused items from the db were not removed')
+        self.assertFalse(t.unused_items_possible)
+        # Replacing the only use of an item removes it
+        cache.set_field('tags', {1: 'other'})
+        self.assertNotIn('newtag', t.id_map.values())
+        # An item left unused by a write that failed part way is removed by the next one
+        from calibre.db import write as w
+        orig = w.end_unused_items_cleanup
+        def boom(table):
+            raise RuntimeError('boom')
+        w.end_unused_items_cleanup = boom
+        try:
+            with self.assertRaises(RuntimeError):
+                cache.set_field('tags', {2: 'failed_tag'})
+        finally:
+            w.end_unused_items_cleanup = orig
+        self.assertTrue(t.unused_items_possible)
+        conn.execute('INSERT INTO tags (name) VALUES (?)', ('orphan3',))
+        iid = conn.last_insert_rowid()
+        t.id_map[iid] = 'orphan3'
+        t.col_book_map[iid] = set()
+        cache.set_field('tags', {3: 'fine'})
+        self.assertNotIn('orphan3', t.id_map.values(), 'unused item not removed after a failed write')
+        self.assertFalse(t.unused_items_possible)
+        self.assertEqual([], self.find_library_inconsistencies(cache))
+    # }}}

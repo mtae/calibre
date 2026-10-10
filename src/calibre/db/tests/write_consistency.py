@@ -1035,19 +1035,7 @@ KNOWN_INCONSISTENT = known_table(
     ('set_link_map', {'items:tags'}, (
         'sql:update tags set link=? where id=?@1',
     )),
-    # All the fields are set inside a transaction that is rolled back, with the in-memory tables reloaded, when something fails. But the files of
-    # the note of a tag that is no longer used (backup, resources) are removed as it is retired, and these are not restored by the rollback
-    ('set_metadata_fields', {'note-backup-missing'}, (
-        'file:notes.retire_entry@1/after',
-        'file:notes.remove_with_retry@1',
-    )),
-    ('set_metadata_fields', {'note-backup-missing', 'note-resource-missing'}, (
-        'file:notes.remove_with_retry@2',
-        'sql:delete from tags where id=?@1',
-        'sql:insert or replace into comments(book,text) values (?,?)@1',
-    )),
-    # The title and authors are set, and the folder moved, before the other fields. The note of a tag that is no longer used is lost as for
-    # set_metadata_fields
+    # The title and authors are set, and the folder moved, before the other fields
     ('set_metadata_rename', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',
     )),
@@ -1055,13 +1043,6 @@ KNOWN_INCONSISTENT = known_table(
         'file:copier.copy_all@1',
         'file:copier.delete_sources@1',
         'file:remove_dir_if_empty@1',
-    )),
-    ('set_metadata_rename', {'note-backup-missing'}, (
-        'file:notes.retire_entry@1/after',
-        'file:notes.remove_with_retry@1',
-    )),
-    ('set_metadata_rename', {'note-backup-missing', 'note-resource-missing'}, (
-        'file:notes.remove_with_retry@2',
     )),
     # The note is written in several steps that are not in a transaction, the backup file is written last
     ('set_notes_new', {'note-backup-missing'}, (

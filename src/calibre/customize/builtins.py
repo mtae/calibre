@@ -3,19 +3,9 @@
 import glob
 import os
 
-from calibre.ai.anthropic import AnthropicAI
-from calibre.ai.google import GoogleAI
-from calibre.ai.grok import GrokAI
-from calibre.ai.lm_studio import LMStudioAI
-from calibre.ai.ollama import OllamaAI
-from calibre.ai.open_router import OpenRouterAI
-from calibre.ai.openai import OpenAI
-from calibre.ai.openai_compatible import OpenAICompatible
-from calibre.ai.venice import VeniceAI
 from calibre.constants import ismacos, numeric_version
 from calibre.customize import FileTypePlugin, InterfaceActionBase, MetadataReaderPlugin, MetadataWriterPlugin, PreferencesPlugin, StoreBase
 from calibre.ebooks.html.to_zip import HTML2ZIP
-from calibre.ebooks.metadata.archive import ArchiveExtract, KPFExtract, get_comic_metadata
 from calibre.utils.localization import _
 
 plugins = []
@@ -107,7 +97,9 @@ class TXT2TXTZ(FileTypePlugin):
             return path_to_ebook
 
 
-plugins += [HTML2ZIP, PML2PMLZ, TXT2TXTZ, ArchiveExtract, KPFExtract]
+plugins += [HTML2ZIP, PML2PMLZ, TXT2TXTZ]
+# ArchiveExtract and KPFExtract are in builtins_late (see late_group_positions)
+late_group_positions = {'archive': len(plugins)}
 # }}}
 
 # Metadata reader plugins {{{
@@ -158,6 +150,8 @@ class ComicMetadataReader(MetadataReaderPlugin):
             if series_index not in {'volume', 'issue'}:
                 series_index = 'volume'
             try:
+                from calibre.ebooks.metadata.archive import get_comic_metadata
+
                 mi.smart_update(get_comic_metadata(stream, type, series_index=series_index))
             except Exception:
                 pass
@@ -711,188 +705,8 @@ plugins += input_profiles + output_profiles
 # }}}
 
 # Device driver plugins {{{
-from calibre.devices.android.driver import ANDROID, S60, WEBOS
-from calibre.devices.binatone.driver import README
-from calibre.devices.blackberry.driver import BLACKBERRY, PLAYBOOK
-from calibre.devices.boeye.driver import BOEYE_BDX, BOEYE_BEX
-from calibre.devices.cybook.driver import CYBOOK, DIVA, MUSE, ORIZON
-from calibre.devices.eb600.driver import (
-    BOOQ,
-    COOL_ER,
-    DBOOK,
-    EB600,
-    ECLICTO,
-    ELONEX,
-    GER2,
-    INVESBOOK,
-    ITALICA,
-    MENTOR,
-    PI2,
-    POCKETBOOK301,
-    POCKETBOOK360,
-    POCKETBOOK360P,
-    POCKETBOOK602,
-    POCKETBOOK622,
-    POCKETBOOK701,
-    POCKETBOOK740,
-    POCKETBOOKHD,
-    SHINEBOOK,
-    TOLINO,
-)
-from calibre.devices.edge.driver import EDGE
-from calibre.devices.eslick.driver import EBK52, ESLICK
-from calibre.devices.folder_device.driver import FOLDER_DEVICE_FOR_CONFIG
-from calibre.devices.hanlin.driver import BOOX, HANLINV3, HANLINV5, SPECTRA
-from calibre.devices.hanvon.driver import ALEX, AZBOOKA, EB511, KIBANO, LIBREAIR, N516, ODYSSEY, THEBOOK
-from calibre.devices.iliad.driver import ILIAD
-from calibre.devices.irexdr.driver import IREXDR800, IREXDR1000
-from calibre.devices.iriver.driver import IRIVER_STORY
-from calibre.devices.jetbook.driver import JETBOOK, JETBOOK_COLOR, JETBOOK_MINI, MIBUK
-from calibre.devices.kindle.driver import KINDLE, KINDLE2, KINDLE_DX, KINDLE_FIRE
-from calibre.devices.kobo.driver import KOBO, KOBOTOUCH
-from calibre.devices.misc import (
-    ADAM,
-    ALURATEK_COLOR,
-    AVANT,
-    CERVANTES,
-    COBY,
-    EEEREADER,
-    EX124G,
-    GEMEI,
-    LUMIREAD,
-    MOOVYBOOK,
-    NEXTBOOK,
-    PALMPRE,
-    PDNOVEL,
-    PDNOVEL_KOBO,
-    POCKETBOOK626,
-    SONYDPTS1,
-    SWEEX,
-    TREKSTOR,
-    VELOCITYMICRO,
-    WAYTEQ,
-    WOXTER,
-)
-from calibre.devices.mtp.driver import MTP_DEVICE
-from calibre.devices.nokia.driver import E52, E71X, N770, N810
-from calibre.devices.nook.driver import NOOK, NOOK_COLOR
-from calibre.devices.nuut2.driver import NUUT2
-from calibre.devices.prs505.driver import PRS505
-from calibre.devices.prst1.driver import PRST1
-from calibre.devices.smart_device_app.driver import SMART_DEVICE_APP
-from calibre.devices.sne.driver import SNE
-from calibre.devices.teclast.driver import ARCHOS7O, IPAPYRUS, NEWSMY, PICO, SOVOS, STASH, SUNSTECH_EB700, TECLAST_K3, WEXLER
-from calibre.devices.user_defined.driver import USER_DEFINED
-
-# Order here matters. The first matched device is the one used.
-plugins += [
-    HANLINV3,
-    HANLINV5,
-    BLACKBERRY,
-    PLAYBOOK,
-    CYBOOK,
-    ORIZON,
-    MUSE,
-    DIVA,
-    ILIAD,
-    IREXDR1000,
-    IREXDR800,
-    JETBOOK,
-    JETBOOK_MINI,
-    MIBUK,
-    JETBOOK_COLOR,
-    SHINEBOOK,
-    POCKETBOOK360,
-    POCKETBOOK301,
-    POCKETBOOK602,
-    POCKETBOOK701,
-    POCKETBOOK360P,
-    POCKETBOOK622,
-    PI2,
-    POCKETBOOKHD,
-    POCKETBOOK740,
-    KINDLE,
-    KINDLE2,
-    KINDLE_DX,
-    KINDLE_FIRE,
-    NOOK,
-    NOOK_COLOR,
-    PRS505,
-    PRST1,
-    ANDROID,
-    S60,
-    WEBOS,
-    N770,
-    E71X,
-    E52,
-    N810,
-    COOL_ER,
-    ESLICK,
-    EBK52,
-    NUUT2,
-    IRIVER_STORY,
-    GER2,
-    ITALICA,
-    ECLICTO,
-    DBOOK,
-    INVESBOOK,
-    BOOX,
-    BOOQ,
-    EB600,
-    TOLINO,
-    README,
-    N516,
-    KIBANO,
-    THEBOOK,
-    LIBREAIR,
-    EB511,
-    ELONEX,
-    TECLAST_K3,
-    NEWSMY,
-    PICO,
-    SUNSTECH_EB700,
-    ARCHOS7O,
-    SOVOS,
-    STASH,
-    WEXLER,
-    IPAPYRUS,
-    EDGE,
-    SNE,
-    ALEX,
-    ODYSSEY,
-    PALMPRE,
-    KOBO,
-    KOBOTOUCH,
-    AZBOOKA,
-    FOLDER_DEVICE_FOR_CONFIG,
-    AVANT,
-    CERVANTES,
-    MENTOR,
-    SWEEX,
-    PDNOVEL,
-    SPECTRA,
-    GEMEI,
-    VELOCITYMICRO,
-    PDNOVEL_KOBO,
-    LUMIREAD,
-    ALURATEK_COLOR,
-    TREKSTOR,
-    EEEREADER,
-    NEXTBOOK,
-    ADAM,
-    MOOVYBOOK,
-    COBY,
-    EX124G,
-    WAYTEQ,
-    WOXTER,
-    POCKETBOOK626,
-    SONYDPTS1,
-    BOEYE_BEX,
-    BOEYE_BDX,
-    MTP_DEVICE,
-    SMART_DEVICE_APP,
-    USER_DEFINED,
-]
+# The device drivers are imported by builtins_late.devices() when the plugins are first needed.
+late_group_positions['devices'] = len(plugins)
 
 # }}}
 
@@ -2103,7 +1917,147 @@ plugins += [
 
 # }}}
 
-plugins.extend((OpenRouterAI, GoogleAI, AnthropicAI, OllamaAI, LMStudioAI, OpenAI, OpenAICompatible, GrokAI, VeniceAI))
+late_group_positions['ai'] = len(plugins)  # the AI providers are in builtins_late.ai()
+
+# Plugins that are not needed by most processes (device drivers, AI providers,
+# archive import plugins) live in builtins_late.py so that their modules are
+# only imported when something asks for those plugins, see
+# calibre.customize.ui._ensure_late(). plugin_slots is the complete, ordered
+# registration list: the classes in `plugins` plus, at the position where the
+# group would have been registered, the *name* of each late group.
+plugin_slots = list(plugins)
+for _name, _pos in sorted(late_group_positions.items(), key=lambda x: -x[1]):
+    plugin_slots.insert(_pos, _name)
+del _name, _pos
+
+# Names of all the plugins in the late groups, so that builtin_names does not
+# need to import them. A test checks that this matches builtins_late.
+LATE_NAMES = frozenset((
+    'Acer Lumiread Device Interface',
+    'Airis Dbook Device Interface',
+    'Alex driver',
+    'Aluratek Color Device Interface',
+    'Android driver',
+    'Anthropic',
+    'Archive Extract',
+    'Archos 7O device interface',
+    'Astak Mentor EB600',
+    'Asus EEE Reader device interface',
+    'Azbooka driver',
+    'BOEYE BDX reader driver',
+    'BOEYE BEX reader driver',
+    'BOOX driver',
+    'Binatone Readme Device Interface',
+    'Blackberry Device Interface',
+    'Blackberry Playbook Interface',
+    'Bookeen Diva HD Device Interface',
+    'Booq Avant Device Interface',
+    'Booq Device Interface',
+    'Bq Cervantes Device Interface',
+    'COBY MP977 device interface',
+    'Cool-er device interface',
+    'Cybook Gen 3 / Opus Device Interface',
+    'Cybook Muse Device Interface',
+    'Cybook Odyssey driver',
+    'Cybook Orizon Device Interface',
+    'EBK-52 Device Interface',
+    'ESlick Device Interface',
+    'Ectaco JetBook Device Interface',
+    'Edge Device Interface',
+    'Elonex 600EB',
+    'Elonex EB 511 driver',
+    'Folder Device Interface',
+    'Ganaxa GeR2 Device Interface',
+    'Gemei Device Interface',
+    'GoogleAI',
+    'Grok',
+    'Hanlin V3 driver',
+    'Hanlin V5 driver',
+    'IRex Digital Reader 1000 Device Interface',
+    'IRex Digital Reader 800 Device Interface',
+    'IRex Iliad Device Interface',
+    'Infibeam Pi2 Device Interface',
+    'Inves Book Device Interface',
+    'Iriver Story Device Interface',
+    'Italica Device Interface',
+    'JetBook Color Device Interface',
+    'JetBook Mini Device Interface',
+    'KPF Extract',
+    'Kibano driver',
+    'Kindle 2/3/4/Touch/PaperWhite/Voyage Device Interface',
+    'Kindle DX Device Interface',
+    'Kindle Device Interface',
+    'Kindle Fire Device Interface',
+    'Kobo Reader Device Interface',
+    'KoboTouch',
+    'LMStudio',
+    'Libre Air Driver',
+    'MTP Device Interface',
+    'MiBuk Wolder Device Interface',
+    'Moovybook device interface',
+    'Motorola Ex124G device interface',
+    'N516 driver',
+    'Netronix EB600 Device Interface',
+    'Newsmy device interface',
+    'Nextbook device interface',
+    'Nokia 770 Device Interface',
+    'Nokia E52 device interface',
+    'Nokia E71X device interface',
+    'Nokia N800/N810/N900/N950/N9 Device Interface',
+    'Nook Color Device Interface',
+    'Nook Device Interface',
+    'Notion Ink Adam device interface',
+    'Nuut2 Device Interface',
+    'OllamaAI',
+    'OpenAI',
+    'OpenAI compatible',
+    'OpenRouter',
+    'Palm Pre Device Interface',
+    'Pandigital Kobo device interface',
+    'Pandigital Novel device interface',
+    'Pico device interface',
+    'Pocket Touch HD Device Interface',
+    'PocketBook 301 Device Interface',
+    'PocketBook 360 Device Interface',
+    'PocketBook 360+ Device Interface',
+    'PocketBook 622 Device Interface',
+    'PocketBook 701 Device Interface',
+    'PocketBook 740 Device Interface',
+    'PocketBook Pro 602/902 Device Interface',
+    'PocketBook Touch Lux 2',
+    'S60 driver',
+    'SONY DPT-S1',
+    'SONY Device Interface',
+    'SONY PRST1 and newer Device Interface',
+    'Samsung SNE Device Interface',
+    'ShineBook device Interface',
+    'SmartDevice App Interface',
+    'Sovos device interface',
+    'Spectra',
+    'Stash device interface',
+    'Sunstech EB700 device interface',
+    'Sweex Device Interface',
+    'Teclast K3/K5 Device Interface',
+    'The Book driver',
+    'Tolino Shine Device Interface',
+    'Trekstor E-book player device interface',
+    'User Defined USB driver',
+    'VelocityMicro device interface',
+    'Venice AI',
+    'WayteQ device interface',
+    'WebOS driver',
+    'Wexler device interface',
+    'Woxter Scriba device interface',
+    'eClicto Device Interface',
+    'iPapyrus device interface',
+))
+
+
+def late_group(name):
+    from calibre.customize import builtins_late
+
+    return getattr(builtins_late, name)()
+
 
 if __name__ == '__main__':
     # Test load speed

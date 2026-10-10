@@ -117,12 +117,17 @@ class Info:
     ub_first, ub_last: characters that the left/right edge can consume as part
         of a repeat without an upper limit, which is what the regex engine
         will give back one by one when what follows fails to match
+    sealed_last: characters in last that are only ever matched by a possessive
+        repeat at the right edge, so the engine never gives them back and
+        whatever follows (or the next iteration of a repeated group) cannot
+        take some of them
     """
 
-    __slots__ = ('chars', 'first', 'last', 'nullable', 'ub_first', 'ub_last')
+    __slots__ = ('chars', 'first', 'last', 'nullable', 'sealed_last', 'ub_first', 'ub_last')
 
-    def __init__(self, nullable=True, first=EMPTY, last=EMPTY, ub_first=EMPTY, ub_last=EMPTY, chars=EMPTY):
+    def __init__(self, nullable=True, first=EMPTY, last=EMPTY, ub_first=EMPTY, ub_last=EMPTY, chars=EMPTY, sealed_last=EMPTY):
         self.nullable, self.first, self.last, self.ub_first, self.ub_last, self.chars = nullable, first, last, ub_first, ub_last, chars
+        self.sealed_last = sealed_last
 
 
 def describe_chars(chars):
@@ -206,7 +211,7 @@ class Linter:
 
     @staticmethod
     def combine(infos):
-        first, ub_first, last, ub_last, chars = set(), set(), set(), set(), set()
+        first, ub_first, last, ub_last, chars, sealed, unsealed = set(), set(), set(), set(), set(), set(), set()
         for info in infos:
             first |= info.first
             ub_first |= info.ub_first
@@ -215,11 +220,16 @@ class Linter:
         for info in reversed(infos):
             last |= info.last
             ub_last |= info.ub_last
+            sealed |= info.sealed_last
+            unsealed |= info.last - info.sealed_last
             if not info.nullable:
                 break
         for info in infos:
             chars |= info.chars
-        return Info(all(i.nullable for i in infos), frozenset(first), frozenset(last), frozenset(ub_first), frozenset(ub_last), frozenset(chars))
+        return Info(
+            all(i.nullable for i in infos), frozenset(first), frozenset(last), frozenset(ub_first), frozenset(ub_last), frozenset(chars),
+            frozenset(sealed - unsealed),
+        )
 
     def node(self, op, av, flags):
         chars = single_char_set(op, av, flags)
@@ -230,13 +240,15 @@ class Linter:
             b = self.sequence(body, flags)
             possessive = op is sre_constants.POSSESSIVE_REPEAT
             if hi == MAXREPEAT and b.chars:
-                # Any iteration can start or end with any character that the body can start or end with
-                ub_first, ub_last = b.first, EMPTY if possessive else b.last
+                # Any iteration can start or end with any character that the body can start or end with,
+                # except that a possessive repeat at the end of the body takes all of the characters it can
+                ub_first, ub_last = b.first, EMPTY if possessive else b.last - b.sealed_last
             else:
                 ub_first, ub_last = b.ub_first, EMPTY if possessive else b.ub_last
             if hi > 1 and b.ub_last & b.ub_first:
                 self.report('nested', f'repeated group can start and end with an unbounded repeat over {describe_chars(b.ub_last & b.ub_first)}')
-            return Info(lo == 0 or b.nullable, b.first, b.last, ub_first, ub_last, b.chars)
+            sealed_last = b.last if possessive and hi == MAXREPEAT else b.sealed_last
+            return Info(lo == 0 or b.nullable, b.first, b.last, ub_first, ub_last, b.chars, sealed_last)
         if op is sre_constants.SUBPATTERN:
             group, add_flags, del_flags, body = av
             return self.sequence(body, (flags | add_flags) & ~del_flags)
@@ -263,7 +275,8 @@ class Linter:
         def u(attr):
             return frozenset().union(*(getattr(i, attr) for i in infos))
 
-        return Info(any(i.nullable for i in infos), u('first'), u('last'), u('ub_first'), u('ub_last'), u('chars'))
+        sealed = u('sealed_last') - frozenset().union(*(i.last - i.sealed_last for i in infos))
+        return Info(any(i.nullable for i in infos), u('first'), u('last'), u('ub_first'), u('ub_last'), u('chars'), sealed)
 
 
 def lint_pattern(pattern, flags=0):
@@ -870,6 +883,11 @@ PASSING_CASES = (
     ('HeuristicProcessor(chapter headings)', 'spaces', 2000),
     ('HeuristicProcessor(chapter headings)', 'unclosed_tags', 400),
     ('HeuristicProcessor(delete blank paragraphs)', 'blank_paragraphs', 800),
+    # Fixed multi_blank, any_multi_blank: exponential in the number of blank <div>s, 5 s for 24 of them
+    ('HeuristicProcessor(delete blank paragraphs)', 'blank_paragraph_then_blank_divs', 32),
+    ('HeuristicProcessor(delete blank paragraphs)', 'blank_paragraph_then_blank_divs', 5000),
+    ('HeuristicProcessor(delete blank paragraphs)', 'blank_p_div_whitespace', 1000),
+    ('HeuristicProcessor(all heuristics)', 'blank_paragraph_then_blank_divs', 32),
     ('HeuristicProcessor(delete blank paragraphs)', 'newlines', 3000),
     ('HeuristicProcessor(unwrap lines)', 'many_paragraphs', 1000),
     ('HeuristicProcessor(italicize)', 'many_paragraphs', 1000),
@@ -910,20 +928,6 @@ PASSING_CASES = (
 # move the case to PASSING_CASES then.
 SLOW_CASES = {
     # Exponential
-    ('HeuristicProcessor(all heuristics)', 'blank_paragraph_then_blank_divs', 32):
-        'exponential, 0.3 s for n=20, 5 s for n=24, over 25 s for n=32: utils.py:28 multi_blank, :29 any_multi_blank. In (\\s*<div>\\s*</div>\\s*)* the \\s* around </div> share the whitespace',
-    ('HeuristicProcessor(delete blank paragraphs)', 'blank_paragraph_then_blank_divs', 32):
-        'exponential: the same multi_blank pattern, reached through detect_whitespace',
-    ('HeuristicProcessor(chapter headings)', 'padded_line', 48):
-        'exponential, 0.2 s for n=16, 5.6 s for n=32: utils.py:1030 chapdetect3, the lookahead (?!([\\W]+\\s*)+) over whitespace',
-    ('HeuristicProcessor(chapter headings)', 'hash_run', 100):
-        'exponential, 1.5 s for n=50: utils.py:404 chapter heading patterns built from line_open/line_close, "[A-Z#]+(\\s|-){0,3}" repeated',
-    ('HeuristicProcessor(chapter headings)', 'long_chapter_title', 100):
-        'exponential, 2.2 s for n=50: utils.py:404, a heading followed by a long word',
-    ('HeuristicProcessor(all heuristics)', 'long_chapter_title', 100):
-        'exponential, 2.5 s for n=50: utils.py:404 (see above), reached from HeuristicProcessor.__call__',
-    ('HeuristicProcessor(chapter headings)', 'emphasized_padding', 400):
-        'about n**4, 0.5 s for n=128, 7.5 s for n=256: utils.py:404, whitespace inside several emphasis tags',
     # Cubic
     ('HeuristicProcessor.cleanup_markup', 'padded_closing_tags', 1000):
         'cubic, 0.3 s for n=400, 1.5 s for n=800: utils.py:580, \\s*<i>\\s*(<i>\\s*</i>\\s*){0,2}\\s*</i> in the empty inline tag removal',
@@ -940,8 +944,6 @@ SLOW_CASES = {
         'quadratic, 0.8 s for n=400, 3.6 s for n=800: utils.py:656 blanks_around_scene_breaks, (<p>\\s*</p>\\s*){1,}\\s*',
     ('HeuristicProcessor(scene breaks)', 'newlines', 1000):
         'quadratic, 0.8 s for n=400, 2.9 s for n=800: utils.py:656, a run of blank lines',
-    ('HeuristicProcessor(all heuristics)', 'spaces', 8000):
-        'quadratic, 0.6 s for n=4000, 2.2 s for n=8000: utils.py:26 blankreg and :27 anyblank start with \\s*, which is retried at every space',
     ('DocAnalysis(txt)', 'unclosed_tags', 2000):
         'quadratic in the length of a text without line breaks, 0.7 s for n=800, 3 s for n=1600: preprocess.py:96 .*?\\n',
     ('txt.detect_paragraph_type', 'unclosed_tags', 2000):
@@ -1027,15 +1029,10 @@ KNOWN_OFFENDERS = {
     ('ebooks/conversion/preprocess.py', 'book_designer_rules', 'nested'): (2, 'line 433, 437: (align=)*(?(1)(\\w+))* between lazy [^><]*?'),
     ('ebooks/conversion/preprocess.py', 'book_designer_rules', 'stacked'): (2, 'line 433, 437: [^><]*? followed by (align=)* and [^><]*?'),
     ('ebooks/conversion/preprocess.py', 'pdftohtml_rules', 'stacked'): (1, 'line 407: <br>\\s*(([*#=] *){3,})\\s*<br>: spaces shared by \\s* and the group, not slow on the br_star_run input'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.__call__', 'nested'): (1, 'line 1030: renumber_headings/chapter: (?!([\\W]+\\s*)+) lookahead'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.__call__', 'stacked'): (1, 'line 1030: renumber_headings/chapter: \\s* before \\s*'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.__init__', 'nested'): (2, 'line 28, 29: multi_blank/any_multi_blank: (\\s*<p>\\s*</p>(\\s*<div>\\s*</div>\\s*)*){2,}'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.chapter_head', 'stacked'): (1, 'line 56: ^\\s*(.*?)\\s*$, applied to one heading, not measured'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.cleanup_markup', 'stacked'): (2, 'line 579, 580: empty inline tag removal around \\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.detect_whitespace', 'stacked'): (4, 'line 646, 651, 656, 678: blanks_n_nopunct/blanks_between_paragraphs: (blank paragraphs\\s*){1,}\\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.fix_nbsp_indents', 'stacked'): (1, 'line 559: (<span>\\s*)+ \\s* before the nbsp run'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_chapters', 'nested'): (53, 'line 404: chapter heading patterns: ([A-Z#]+(\\s|-){0,3}){1,5} and similar groups, 47 of them exponential or worse in the heading length'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_chapters', 'stacked'): (53, 'line 404: chapter heading patterns: \\s* next to \\s* or \\d+ next to [\\d..]+'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_pre', 'stacked'): (1, 'line 540: .*?(?<=<pre>)(?P<text>.*?)</pre>: cubic in the number of unclosed <pre> tags, see SLOW_CASES'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_user_break', 'stacked'): (1, 'line 768: .*?width(:|=)(?P<wnum>\\d+).*, applied to the scene break string the user typed, not to the book'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.punctuation_unwrap', 'stacked'): (3, 'line 513-515: line joining: \\s* (style_close)? (\\s*</p>)? \\s*'),
@@ -1060,14 +1057,21 @@ class LintTest(unittest.TestCase):
             r'([a-z]+\s{0,3}){1,5}',
             r'(\s*<p[^>]*>\s*</p>(\s*<div>\s*</div>\s*)*){2,}',
             r'(?!([\W]+\s*)+)',
+            r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}',
+            r'(\s*+<p[^>]*>\s*+</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}',
         ):
             self.assertIn('nested', rules(pattern), pattern)
         for pattern in (
             r'\s*<p>\s*', r'<p[^>]*>\s*</p>', r'\s*+\s*', r'(?>\s*)\s*', r'\s*(?!\s)\S+', r'\s*(?=<)\s*', r'(?<!\s)\s*(?<=a)\s*',
             r'[^>]*>', r'(<b>\s*)*', r'(\s*<p>)*', r'(?:<[ibu][^>]*>)*\s*', r'\w+\s*\d', r'(ab)*(ab)*', r'a{0,3}a{0,3}', r'[a-z]+|\s*',
             r'(?:\s*(?P<c>[a-z]+))??\s*x', r'x*(?i:y)*', r'(a|b)*c*',
+            # A possessive repeat at the end of a repeated group takes all the characters, so the next iteration and what follows get none
+            r'(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}', r'(a*+)*a*', r'(?:b|a*+)*a*',
         ):  # fmt: skip
             self.assertEqual(rules(pattern), [], pattern)
+        # A possessive repeat does not help when the group can end with the characters in some other way
+        self.assertEqual(rules(r'(a*+(?:b|a)?)*a*'), ['stacked'])
+        self.assertEqual(rules(r'(?:b+a*+)*a*'), ['nested'])
         # Characters that only differ in case are the same character with IGNORECASE
         self.assertEqual(rules(r'a*A*', re.IGNORECASE), ['stacked'])
         self.assertEqual(rules(r'a*A*'), [])

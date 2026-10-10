@@ -233,6 +233,49 @@ class ReadingTest(BaseTest):
 
     # }}}
 
+    def test_field_key_caches(self):  # {{{
+        from calibre.db.lazy import ProxyMetadata
+        from calibre.library.field_metadata import FieldMetadata
+
+        fm = FieldMetadata()
+
+        class DB:
+            field_metadata = fm
+            formatter_template_cache = {}
+
+        def check():
+            fields = [k for k in fm if fm[k]['kind'] == 'field']
+            custom = [k for k in fields if fm[k]['is_custom']]
+            self.assertEqual(fm.all_field_keys(), fields)
+            self.assertEqual(fm.custom_field_keys(), custom)
+            self.assertEqual(fm.custom_field_keys(include_composites=False), [k for k in custom if fm[k]['datatype'] != 'composite'])
+
+        check()
+        fm.add_custom_field('a', 'tbl', 'col', 'series', 1, 'A', {}, True, False, True)
+        check()
+        fm.add_custom_field('b', 'tbl', 'col', 'composite', 2, 'B', {}, False, False, False)
+        check()
+        self.assertEqual(fm.custom_field_keys(), ['#a', '#b'])
+        fm.custom_field_keys().append('x')  # callers get a fresh list each time
+        self.assertEqual(fm.custom_field_keys(), ['#a', '#b'])
+        fm.add_user_category('@u', 'U')
+        fm.add_search_category('@s', 'S')
+        check()
+        fm.remove_user_categories()
+        fm.remove_dynamic_categories()
+        check()
+        del fm['#b']
+        check()
+        self.assertNotIn('#b', fm.custom_field_keys())
+        proxy = ProxyMetadata(DB(), 1)
+        self.assertIn('#a', proxy.all_field_keys())
+        fm.add_custom_field('c', 'tbl', 'col', 'text', 3, 'C', {}, True, False, True)
+        self.assertIn('#c', proxy.all_field_keys())
+        del fm['#c']
+        self.assertNotIn('#c', proxy.all_field_keys())
+
+    # }}}
+
     def test_serialize_metadata(self):  # {{{
         from calibre.library.field_metadata import fm_as_dict
         from calibre.utils.serialize import json_dumps, json_loads, msgpack_dumps, msgpack_loads

@@ -446,7 +446,7 @@ class ProxyMetadata(Metadata):
 
     def all_field_keys(self):
         um = ga(self, '_user_metadata')
-        return ALL_METADATA_FIELDS.union(frozenset(um.all_field_keys()))
+        return um.memoized('proxy_all_field_keys', lambda: ALL_METADATA_FIELDS.union(frozenset(um.all_field_keys())))
 
     def all_non_none_fields(self):
         self._unimplemented_exception('all_non_none_fields', add_txt=False)

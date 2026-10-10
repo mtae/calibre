@@ -277,7 +277,12 @@ def detect_paragraph_type(txt):
     """
     txt = txt.replace('\r\n', '\n')
     txt = txt.replace('\r', '\n')
-    txt_line_count = len(re.findall(r'(?mu)^\s*.+$', txt))
+    # Both patterns below need a character that is not a line break, so a match cannot use the line breaks at the end of the
+    # text, and every start in them fails after scanning to the end of the text: quadratic time in the number of blank lines
+    # at the end. Everything else matches, or fails, at the first start that can. The matches of the text without those
+    # line breaks are the same ($ matches at the end of the text as it matches before a line break).
+    stripped = txt.rstrip('\n')
+    txt_line_count = len(re.findall(r'(?mu)^\s*.+$', stripped))
 
     # Check for hard line breaks - true if 55% of the doc breaks in the same region
     docanalysis = DocAnalysis('txt', txt)
@@ -285,7 +290,7 @@ def detect_paragraph_type(txt):
 
     if hardbreaks:
         # Determine print percentage
-        tab_line_count = len(re.findall(r'(?mu)^(\t|\s{2,}).+$', txt))
+        tab_line_count = len(re.findall(r'(?mu)^(\t|\s{2,}).+$', stripped))
         print_percent = tab_line_count / float(txt_line_count)
 
         # Determine block percentage

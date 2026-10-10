@@ -253,8 +253,11 @@ process_item(MatchInfo *m, Stack *stack, int32_t *final_positions, UStringSearch
     return final_score;
 }
 
+// Note that this function (and match() that calls it) is called without
+// holding the GIL, so it must not use the python API, including setting
+// exceptions. Errors are reported via err.
 static bool
-create_searches(UStringSearch **searches, UChar *haystack, int32_t haystack_len, UChar *needle, int32_t needle_len, UCollator *collator) {
+create_searches(UStringSearch **searches, UChar *haystack, int32_t haystack_len, UChar *needle, int32_t needle_len, UCollator *collator, UErrorCode *err) {
     int32_t i = 0, pos = 0;
     UErrorCode status = U_ZERO_ERROR;
 
@@ -264,7 +267,7 @@ create_searches(UStringSearch **searches, UChar *haystack, int32_t haystack_len,
         if (pos == i) break;
         searches[pos] = usearch_openFromCollator(needle + pos, i - pos, haystack, haystack_len, collator, NULL, &status);
         if (U_FAILURE(status)) {
-            PyErr_SetString(PyExc_ValueError, u_errorName(status));
+            *err = status;
             searches[pos] = NULL;
             return false;
         }
@@ -294,7 +297,8 @@ match(
     UCollator *collator,
     UChar *level1,
     UChar *level2,
-    UChar *level3) {
+    UChar *level3,
+    UErrorCode *err) {
     Stack stack = {0};
     int32_t i = 0, maxhl = 0;
     int32_t r = 0, *positions = NULL;
@@ -314,7 +318,7 @@ match(
     positions = (int32_t *)calloc(2 * needle_len, sizeof(int32_t)); // One set of positions is the final answer and one set is working space
     searches = (UStringSearch **)calloc(needle_len, sizeof(UStringSearch *));
     if (matches == NULL || positions == NULL || searches == NULL) {
-        PyErr_NoMemory();
+        *err = U_MEMORY_ALLOCATION_ERROR;
         goto end;
     }
 
@@ -339,16 +343,22 @@ match(
     alloc_stack(&stack, needle_len, maxhl);
     memo = alloc_memory(needle_len, maxhl);
     if (stack.items == NULL || memo == NULL) {
-        PyErr_NoMemory();
+        *err = U_MEMORY_ALLOCATION_ERROR;
         goto end;
     }
 
     for (i = 0; i < (int32_t)item_count; i++) {
+        if (matches[i].haystack_len <= 0) {
+            // Nothing can match in an empty item (and ICU refuses to search in an empty string)
+            match_results[i].score = 0.0;
+            convert_positions(positions, final_positions + i * needle_char_len, matches[i].haystack, needle_char_len, needle_len, 0.0);
+            continue;
+        }
         for (r = 0; r < needle_len; r++) positions[r] = -1;
         stack_clear(&stack);
         clear_memory(memo, needle_len, matches[i].haystack_len);
         free_searches(searches, needle_len);
-        if (!create_searches(searches, matches[i].haystack, matches[i].haystack_len, needle, needle_len, collator)) goto end;
+        if (!create_searches(searches, matches[i].haystack, matches[i].haystack_len, needle, needle_len, collator, err)) goto end;
         matches[i].memo = memo;
         match_results[i].score = process_item(&matches[i], &stack, positions, searches);
         convert_positions(positions, final_positions + i * needle_char_len, matches[i].haystack, needle_char_len, needle_len, match_results[i].score);
@@ -395,6 +405,7 @@ free_matcher(Matcher *self) {
     nullfree(self->level1);
     nullfree(self->level2);
     nullfree(self->level3);
+    self->item_count = 0;
     if (self->collator != NULL) {
         ucol_close(self->collator);
         self->collator = NULL;
@@ -415,6 +426,7 @@ Matcher_init(Matcher *self, PyObject *args, PyObject *kwds) {
     UCollator *col = NULL;
 
     if (!PyArg_ParseTuple(args, "OOOOO", &items, &collator, &level1, &level2, &level3)) return -1;
+    free_matcher(self);  // in case __init__() is called more than once
 
     // Clone the passed in collator (cloning is needed as collators are not thread safe)
     if (!PyCapsule_CheckExact(collator)) {
@@ -437,7 +449,7 @@ Matcher_init(Matcher *self, PyObject *args, PyObject *kwds) {
 
     py_items = PySequence_Fast(items, "Must pass in two sequence objects");
     if (py_items == NULL) goto end;
-    self->item_count = (uint32_t)PySequence_Size(items);
+    self->item_count = (uint32_t)PySequence_Fast_GET_SIZE(py_items);
 
     self->items = (UChar **)calloc(self->item_count, sizeof(UChar *));
     self->item_lengths = (int32_t *)calloc(self->item_count, sizeof(uint32_t));
@@ -454,10 +466,7 @@ Matcher_init(Matcher *self, PyObject *args, PyObject *kwds) {
     for (i = 0; i < (int32_t)self->item_count; i++) {
         p = PySequence_Fast_GET_ITEM(py_items, i);
         self->items[i] = python_to_icu(p, self->item_lengths + i);
-        if (self->items[i] == NULL) {
-            PyErr_NoMemory();
-            goto end;
-        }
+        if (self->items[i] == NULL) goto end;  // python_to_icu() has set the exception
     }
 
 end:
@@ -476,6 +485,7 @@ Matcher_calculate_scores(Matcher *self, PyObject *args) {
     uint32_t i = 0, needle_char_len = 0, j = 0;
     PyObject *items = NULL, *score = NULL, *positions = NULL, *pneedle = NULL;
     UChar *needle = NULL;
+    UErrorCode err = U_ZERO_ERROR;
 
     if (!PyArg_ParseTuple(args, "O", &pneedle)) return NULL;
 
@@ -512,7 +522,8 @@ Matcher_calculate_scores(Matcher *self, PyObject *args) {
         self->collator,
         self->level1,
         self->level2,
-        self->level3);
+        self->level3,
+        &err);
     Py_END_ALLOW_THREADS;
 
     if (ok) {
@@ -534,7 +545,8 @@ Matcher_calculate_scores(Matcher *self, PyObject *args) {
             }
         }
     } else {
-        PyErr_NoMemory();
+        if (err == U_MEMORY_ALLOCATION_ERROR) PyErr_NoMemory();
+        else PyErr_SetString(PyExc_ValueError, u_errorName(err));
         goto end;
     }
 

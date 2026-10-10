@@ -888,6 +888,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.utils.copy_files_test import find_tests
 
         a(find_tests())
+        from calibre.utils.speedup_test import find_tests
+
+        a(find_tests())
         from calibre.utils.safe_atexit import find_tests
 
         a(find_tests())

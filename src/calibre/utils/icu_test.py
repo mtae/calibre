@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2014, Kovid Goyal <kovid at kovidgoyal.net>
 
+import os
+import subprocess
 import sys
 import unittest
 from contextlib import contextmanager
@@ -17,6 +19,25 @@ def make_collation_func(name, locale, numeric=True, maker=icu.make_sort_key_func
         return ans
 
     yield maker(coll, func)
+
+
+def run_in_subprocess(code, timeout=120):
+    """
+    Run python code with the calibre modules and C extensions importable, in a
+    separate interpreter, so that a crash in a C extension (segfault, abort)
+    is reported as a failure of one test instead of killing the test runner.
+    Returns the CompletedProcess, with stdout and stderr as text.
+    """
+    import calibre
+
+    prelude = (
+        'import sys\n'
+        f'sys.path.insert(0, {os.path.dirname(os.path.dirname(os.path.abspath(calibre.__file__)))!r})\n'
+        f'sys.extensions_location = {sys.extensions_location!r}\n'
+        f'sys.resources_location = {sys.resources_location!r}\n'
+        'import calibre.constants\n'
+    )
+    return subprocess.run([sys.executable, '-c', prelude + code], capture_output=True, text=True, timeout=timeout)
 
 
 class TestICU(unittest.TestCase):
@@ -304,6 +325,89 @@ class TestICU(unittest.TestCase):
             dict(icu.partition_by_first_letter(['A1', '', 'a1', '\U0001f431', '\U0001f431x'])),
             {' ': [''], 'A': ['A1', 'a1'], '\U0001f431': ['\U0001f431', '\U0001f431x']},
         )
+
+    @unittest.skipIf(getattr(sys, 'frozen', False), 'The subprocess helper does not work in frozen builds')
+    def test_collator_argument_errors(self):
+        "Test that invalid arguments raise TypeError and do not corrupt memory"
+        # Run in a subprocess because the bug this tests for (freeing a malloc()ed
+        # buffer with Py_DECREF()) is only detectable as a crash. A string whose
+        # first 8 bytes in UTF-16 are the integer 1 makes Py_DECREF() call
+        # _Py_Dealloc() on the buffer.
+        code = r"""
+from calibre_extensions.icu import Collator
+c = Collator('en')
+bad = ((5, 'abc'), ('abc', 5), ('abc', None), ('\x01', 5), ('\x01', None), ('\x01', b'x'), (b'x', 'x'))
+for a, b in bad:
+    for name in ('startswith', 'strcmp', 'contains', 'find'):
+        try:
+            getattr(c, name)(a, b)
+        except TypeError:
+            pass
+        else:
+            raise SystemExit(f'{name}({a!r}, {b!r}) did not raise TypeError')
+try:
+    c.startswith('abc', 'a', 'x')
+except TypeError:
+    pass
+else:
+    raise SystemExit('startswith with a non-integer offset did not raise TypeError')
+for i in range(1000):
+    try:
+        c.startswith('\x01', 5)
+    except TypeError:
+        pass
+print('OK')
+"""
+        p = run_in_subprocess(code)
+        self.ae((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
+
+    @unittest.skipIf(getattr(sys, 'frozen', False), 'The subprocess helper does not work in frozen builds')
+    def test_normalize_expansion(self):
+        "Test normalization of strings that grow by more than a factor of two"
+        # Run in a subprocess as an invalid mode used to crash
+        code = r"""
+from calibre_extensions import icu
+NFC, NFKC, NFD, NFKD = range(4)
+# U+FDFA expands to 18 characters in NFKC and NFKD
+for mode in (NFKC, NFKD):
+    assert len(icu.normalize(mode, '\ufdfa')) == 18
+    assert len(icu.normalize(mode, 'x\ufdfa' * 10)) == 190
+assert icu.normalize(NFD, '\u00e9') == 'e\u0301'
+assert icu.normalize(NFC, 'e\u0301') == '\u00e9'
+assert icu.normalize(NFKD, '') == ''
+for mode in (-1, 4, 100):
+    try:
+        icu.normalize(mode, 'abc')
+    except ValueError:
+        pass
+    else:
+        raise SystemExit(f'normalize with mode {mode} did not raise ValueError')
+print('OK')
+"""
+        p = run_in_subprocess(code)
+        self.ae((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
+
+    @unittest.skipIf(getattr(sys, 'frozen', False), 'The subprocess helper does not work in frozen builds')
+    def test_break_iterator_set_text_leak(self):
+        "Test that BreakIterator.set_text() does not leak the previous text"
+        code = r"""
+import resource, sys
+from calibre_extensions import icu
+bi = icu.BreakIterator(icu.UBRK_WORD, 'en')
+text = 'word ' * 100000  # 1MB of UTF-16
+for i in range(5):
+    bi.set_text(text)
+unit = 1 if sys.platform == 'darwin' else 1024  # ru_maxrss is in bytes on macOS and KB elsewhere
+start = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+for i in range(300):
+    bi.set_text(text)
+growth = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - start) * unit
+assert bi.count_words() == 100000
+# If every call leaked the previous text, memory would grow by 300MB
+print('OK' if growth < 100 * 1024 * 1024 else f'peak memory grew by {growth} bytes')
+"""
+        p = run_in_subprocess(code)
+        self.ae((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
 
     def test_roundtrip(self):
         "Test roundtripping"

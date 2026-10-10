@@ -407,12 +407,40 @@ def rss_mb():
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # Linux reports KB
 
 
+def disable_page_counting():
+    """The background thread that counts the pages of books runs the counting
+    in a helper process (calibre-parallel) that does not exist when running
+    from a source checkout, so every added book would make it fail noisily and
+    compete for the library lock. Its database updates (marking books as
+    needing a scan) are still done."""
+    from calibre.db.page_count import MaintainPageCounts
+
+    MaintainPageCounts.queue_scan = lambda self, book_id=0: None
+
+
+class CommitCounter:
+    """Counts the SQLite transactions committed on the connection of a backend.
+    Every commit is a durable write (fsync), the dominant cost of modifying
+    operations on slow disks, so the count is the machine independent part of
+    their cost."""
+
+    def __init__(self, backend):
+        self.count = 0
+        backend.conn.set_commit_hook(self.hook)
+
+    def hook(self):
+        self.count += 1
+        return False
+
+
 def open_cache(path, timer=None, patch_tables=True):
     """Open a library with the new API, timing each phase and each table read.
     Returns the Cache."""
     from calibre.db import backend as backend_module
     from calibre.db.backend import DB
     from calibre.db.cache import Cache
+
+    disable_page_counting()
 
     timer = timer or Timer()
     orig_read_table = DB._read_table
@@ -462,6 +490,7 @@ def open_legacy(path, timer=None):
     from calibre.db import legacy
     from calibre.db.view import View
 
+    disable_page_counting()
     timer = timer or Timer()
     orig_init = View.__init__
 
@@ -596,7 +625,9 @@ def bench_add_new_api(path):
             mi = Metadata(f'Added Book {i}', [f'Added Author {i % 7}'])
             mi.tags = ['added', f'added{i % 5}']
             books.append((mi, {'EPUB': p}))
+        cc = CommitCounter(cache.backend)
         t.measure('add_100', cache.add_books, books)
+        t.times['add_100_commits'] = cc.count
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return t.times
@@ -615,8 +646,12 @@ def bench_add_legacy_api(path):
             mi = Metadata(f'Added Book {i}', [f'Added Author {i % 7}'])
             mi.tags = ['added', f'added{i % 5}']
             mis.append(mi)
+        cc = CommitCounter(db.backend)
         t.measure('add_books_100', db.add_books, files, ['epub'] * len(files), mis)
+        t.times['add_books_100_commits'] = cc.count
+        cc.count = 0
         t.measure('import_book_x20', lambda: [db.import_book(mi, [files[i]]) for i, mi in enumerate(mis[:20])])
+        t.times['import_book_x20_commits'] = cc.count
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return t.times
@@ -630,12 +665,14 @@ def bench_delete(path):
     db = open_legacy(path)
     ids = sorted(db.new_api.all_book_ids())[::7][:500]
     chunk_size = 100
+    cc = CommitCounter(db.backend)
     st = time.perf_counter()
     for i in range(0, len(ids), chunk_size):
         chunk = ids[i : i + chunk_size]
         db.new_api.remove_books(chunk, permanent=False)
         db.data.books_deleted(tuple(chunk))
     t.times['delete_500_chunks'] = time.perf_counter() - st
+    t.times['delete_500_commits'] = cc.count
     t.measure('commit_clean', lambda: (db.commit(), db.clean()))
     return t.times
 
@@ -644,14 +681,53 @@ def bench_set_tags(path):
     t = Timer()
     cache = open_cache(path, patch_tables=False)
     ids = sorted(cache.all_book_ids())[::3][:1000]
+    cc = CommitCounter(cache.backend)
     t.measure('set_tags_1000_one_call', cache.set_field, 'tags', {b: ('bench tag', f'bench tag {b % 10}') for b in ids})
-    ids2 = sorted(cache.all_book_ids())[1::3][:1000]
-    t.measure('set_tags_1000_individually', lambda: [cache.set_field('tags', {b: ('bench two',)}) for b in ids2])
+    t.times['set_tags_1000_one_call_commits'] = cc.count
+    ids2 = sorted(cache.all_book_ids())[1::3][:100]
+    cc.count = 0
+    st = time.perf_counter()
+    for b in ids2:
+        cache.set_field('tags', {b: ('bench two',)})
+    t.times['set_tags_per_call_100_calls'] = (time.perf_counter() - st) / len(ids2)
+    t.times['set_tags_per_call_commits'] = cc.count / len(ids2)
     return t.times
 
 
-# name: (function, modifies the library, description)
+def bench_machine(path):
+    """Costs of the machine that explain the cost of other benchmarks: durable
+    SQLite commits (limited by the speed of fsync) and creating small files.
+    Done in the folder of the library so that it measures its filesystem."""
+    import sqlite3
+
+    t = Timer()
+    d = tempfile.mkdtemp(prefix='machine_', dir=path)
+    try:
+        conn = sqlite3.connect(os.path.join(d, 'x.db'), isolation_level=None)
+        conn.execute('CREATE TABLE t(a)')
+        st = time.perf_counter()
+        for i in range(100):
+            conn.execute('INSERT INTO t VALUES (1)')
+        t.times['sqlite_commit_each'] = (time.perf_counter() - st) / 100
+        conn.close()
+        st = time.perf_counter()
+        for i in range(500):
+            with open(os.path.join(d, f'f{i}'), 'wb') as f:
+                f.write(b'x' * 200)
+        t.times['create_small_file'] = (time.perf_counter() - st) / 500
+        st = time.perf_counter()
+        for i in range(500):
+            os.rename(os.path.join(d, f'f{i}'), os.path.join(d, f'g{i}'))
+        t.times['rename_file'] = (time.perf_counter() - st) / 500
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return t.times
+
+
+# name: (function, what the benchmark modifies: False, 'db' (only metadata.db,
+# no book files are needed) or 'files' (book files are moved/removed), description)
 BENCHMARKS = {
+    'machine': (bench_machine, False, 'cost of a durable SQLite commit and of creating small files in the library folder'),
     'open_cache': (bench_open_cache, False, 'DB() + Cache.init() with per table read times'),
     'open_legacy': (bench_open_legacy, False, 'LibraryDatabase() (backend, Cache.init, View)'),
     'sort3': (bench_sort3, False, 'multisort by title, authors, series'),
@@ -659,23 +735,33 @@ BENCHMARKS = {
     'categories': (bench_categories, False, 'get_categories() without and with a virtual library'),
     'search': (bench_search, False, 'a set of searches over all books'),
     'virtual_library': (bench_virtual_library, False, 'apply each virtual library, vls_for_books'),
-    'add_new_api': (bench_add_new_api, True, 'Cache.add_books() of 100 books'),
-    'add_legacy_api': (bench_add_legacy_api, True, 'LibraryDatabase.add_books() of 100 books, import_book() of 20'),
-    'delete': (bench_delete, True, 'delete 500 books in chunks of 100 like MultiDeleter'),
-    'set_tags': (bench_set_tags, True, 'set_field tags on 1000 books'),
+    'add_new_api': (bench_add_new_api, 'db', 'Cache.add_books() of 100 books'),
+    'add_legacy_api': (bench_add_legacy_api, 'db', 'LibraryDatabase.add_books() of 100 books, import_book() of 20'),
+    'delete': (bench_delete, 'files', 'delete 500 books in chunks of 100 like MultiDeleter'),
+    'set_tags': (bench_set_tags, 'db', 'set_field tags on 1000 books'),
 }
 
 
-def hardlink_copy(src, dest):
-    """Copy a library so that the benchmarks can modify it. Book files are hard
-    linked (they are not changed by the benchmarks, only moved or removed),
-    the database is copied."""
-    subprocess.check_call(['cp', '-al', src, dest])
-    for name in os.listdir(dest):
-        if name.startswith('metadata.db'):
-            p = os.path.join(dest, name)
-            os.remove(p)
-            shutil.copy2(os.path.join(src, name), p)
+def copy_library(src, dest, mode):
+    """Copy a library so that the benchmarks can modify it. With mode 'db' only
+    the database and notes are copied, with 'files' the book files are hard
+    linked as well (the benchmarks only move or remove them, they never modify
+    them), which needs ``dest`` to be on the same filesystem as ``src``."""
+    if mode == 'files':
+        subprocess.check_call(['cp', '-al', src, dest])
+    else:
+        os.makedirs(dest)
+    # Databases are modified in place, so they must not be hard links
+    for name in os.listdir(src):
+        if name.startswith('metadata.db') or name == '.calnotes':
+            s, d = os.path.join(src, name), os.path.join(dest, name)
+            if os.path.isdir(s):
+                shutil.rmtree(d, ignore_errors=True)
+                shutil.copytree(s, d)
+            else:
+                if os.path.exists(d):
+                    os.remove(d)
+                shutil.copy2(s, d)
 
 
 def worker_env(workdir):
@@ -690,9 +776,12 @@ def worker_env(workdir):
     return env
 
 
-def run_worker(name, libpath, workdir, timeout=3600):
+def run_worker(name, libpath, workdir, timeout=3600, profile=None):
     env = worker_env(workdir)
-    p = subprocess.run([sys.executable, THIS_FILE, '_worker', name, libpath], env=env, capture_output=True, text=True, timeout=timeout)
+    cmd = [sys.executable, THIS_FILE, '_worker', name, libpath]
+    if profile:
+        cmd += ['--profile', profile]
+    p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     if p.returncode != 0:
         raise RuntimeError(f'Benchmark {name} failed:\n{p.stdout[-2000:]}\n{p.stderr[-4000:]}')
     for line in reversed(p.stdout.splitlines()):
@@ -715,7 +804,7 @@ def run_benchmarks(libs, bench_names, reps, workroot, out=print):
                 if modifies:
                     path = os.path.join(workroot, 'copy')
                     shutil.rmtree(path, ignore_errors=True)
-                    hardlink_copy(lib, path)
+                    copy_library(lib, path, modifies)
                 st = time.monotonic()
                 res = run_worker(name, path, workdir)
                 if modifies:
@@ -760,8 +849,8 @@ def _fmt(key, v):
         return '-'
     if key in ('rss_mb',):
         return f'{v:.0f} MB'
-    if key.endswith('_books'):
-        return f'{v:.0f}'
+    if key.endswith(('_books', 'commits')):
+        return f'{v:.1f}' if v != int(v) else f'{v:.0f}'
     return f'{v:.3f}s'
 
 
@@ -799,60 +888,142 @@ def parse_importtime(stderr):
     return mods
 
 
-def summarize_importtime(module, workdir, top=12):
+IMPORT_SNIPPET = """
+import sys, os, time
+src, module = sys.argv[1], sys.argv[2]
+sys.path.insert(0, src)
+sys.resources_location = os.path.join(os.path.dirname(src), 'resources')
+sys.extensions_location = os.path.join(src, 'calibre', 'plugins')
+sys.executables_location = os.path.dirname(sys.executable)
+import tempfile, atexit, shutil
+tdir = tempfile.mkdtemp(prefix='calibre-bench-')
+atexit.register(shutil.rmtree, tdir, True)
+st = time.perf_counter()
+import calibre.ptempfile
+calibre.ptempfile._base_dir = tdir
+import importlib
+importlib.import_module(module)
+print('IMPORT_WALL', time.perf_counter() - st)
+"""
+
+
+def import_package(name):
+    parts = name.split('.')
+    return '.'.join(parts[:2]) if parts[0] == 'calibre' and len(parts) > 1 else parts[0]
+
+
+def summarize_importtime(module, workdir, reps=5, top=12):
+    """Runs fresh interpreters with -X importtime that import nothing but the
+    module (this file is not imported, so its own imports are not counted).
+    Returns medians over the repetitions of the import wall time and of the
+    time spent in each package (the self time of its modules, in ms)."""
     env = worker_env(workdir)
-    st = time.monotonic()
-    p = subprocess.run([sys.executable, '-X', 'importtime', THIS_FILE, '_import', module], env=env, capture_output=True, text=True)
-    wall = time.monotonic() - st
-    if p.returncode != 0:
-        raise RuntimeError(f'Importing {module} failed:\n{p.stderr[-3000:]}')
-    mods = parse_importtime(p.stderr)
-    # Top level imports are those with indent 0 in the nested listing; the
-    # listing is in post order so the last top level entry is the module itself
-    total_self = sum(m[0] for m in mods)
-    groups = {}
-    for self_us, cum, name, indent in mods:
-        g = name.split('.')[0]
-        if g == 'calibre':
-            parts = name.split('.')
-            g = '.'.join(parts[:2]) if len(parts) > 1 else g
-            if len(parts) > 2 and parts[1] in ('gui2', 'ebooks', 'db', 'utils'):
-                g = '.'.join(parts[:3]) if parts[1] == 'gui2' and parts[2] in ('dialogs', 'actions', 'library', 'preferences', 'store', 'viewer', 'tag_browser', 'book_details') else g
-        groups[g] = groups.get(g, 0) + self_us
-    by_self = sorted(mods, key=lambda m: -m[0])[:top]
-    by_cum = sorted((m for m in mods if m[3] <= 2), key=lambda m: -m[1])[:top]
+    src = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(THIS_FILE))))
+    walls, groups, selfs, cums, counts = [], [], [], [], []
+    for _ in range(reps):
+        p = subprocess.run([sys.executable, '-X', 'importtime', '-c', IMPORT_SNIPPET, src, module], env=env, capture_output=True, text=True)
+        if p.returncode != 0:
+            raise RuntimeError(f'Importing {module} failed:\n{p.stderr[-3000:]}')
+        walls.append(float([l for l in p.stdout.splitlines() if l.startswith('IMPORT_WALL')][-1].split()[1]))
+        mods = parse_importtime(p.stderr)
+        counts.append(len(mods))
+        g, sf, cm = {}, {}, {}
+        for self_us, cum, name, indent in mods:
+            g[import_package(name)] = g.get(import_package(name), 0) + self_us / 1e3
+            sf[name] = self_us / 1e3
+            if indent <= 2:
+                cm[name] = cum / 1e3
+        groups.append(g)
+        selfs.append(sf)
+        cums.append(cm)
+
+    def med(listofdicts):
+        keys = set().union(*listofdicts)
+        return sorted(((k, median([d.get(k, 0) for d in listofdicts])) for k in keys), key=lambda x: -x[1])[:top]
+
     return {
         'module': module,
-        'wall_s': wall,
-        'modules_imported': len(mods),
-        'sum_self_s': total_self / 1e6,
-        'top_self': [(n, s / 1e3) for s, c, n, i in by_self],
-        'top_cumulative': [(n, c / 1e3) for s, c, n, i in by_cum],
-        'groups': sorted(((g, v / 1e3) for g, v in groups.items()), key=lambda x: -x[1])[:top],
+        'wall_s': median(walls),
+        'reps': reps,
+        'modules_imported': median(counts),
+        'top_self': med(selfs),
+        'top_cumulative': med(cums),
+        'groups': med(groups),
     }
 
 
 def format_importtime(s):
-    out = [f"{s['module']}: {s['modules_imported']} modules imported, sum of self times {s['sum_self_s']:.2f}s, process wall {s['wall_s']:.2f}s"]
+    out = [f"{s['module']}: {s['modules_imported']:.0f} modules, import wall {s['wall_s']:.2f}s (median of {s['reps']}, interpreter startup not included)"]
     out.append('  by package (self ms): ' + ', '.join(f'{g} {v:.0f}' for g, v in s['groups']))
     out.append('  top modules by self ms: ' + ', '.join(f'{n} {v:.0f}' for n, v in s['top_self']))
     out.append('  top by cumulative ms (depth <= 2): ' + ', '.join(f'{n} {v:.0f}' for n, v in s['top_cumulative']))
     return '\n'.join(out)
 
 
-def gui_startup(libpath, workdir, timeout=600):
-    """Start the GUI offscreen on the library with CALIBRE_DEVELOP_FROM-less
-    source mode, and capture the timed_print checkpoints that calibre prints in
-    debug mode. The GUI exits right after the main window is shown (the
-    ``--shutdown-running-calibre``-less approach: a QTimer is installed through
-    the CALIBRE_BENCH_QUIT env var read by the small launcher below)."""
+def gui_startup(libpath, workdir, timeout=900, profile=None):
+    """Start the GUI offscreen on the library and capture the timed_print
+    checkpoints that calibre prints in debug mode. The process quits as soon
+    as calibre reports that it has started up."""
     env = worker_env(workdir)
-    env['CALIBRE_GUI_BENCH'] = '1'
+    cmd = [sys.executable, THIS_FILE, '_gui', libpath]
+    if profile:
+        cmd += ['--profile', profile]
     st = time.monotonic()
-    p = subprocess.run([sys.executable, THIS_FILE, '_gui', libpath], env=env, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     wall = time.monotonic() - st
     return p.returncode, wall, p.stdout, p.stderr
 
+
+def gui_worker(libpath, profile=None):
+    """Runs in the process that hosts the GUI. Marks the welcome wizard as
+    done, forces calibre's debug mode so that timed_print prints its
+    checkpoints, and quits the event loop once startup is complete."""
+    import calibre
+    import calibre.constants as constants
+
+    constants.DEBUG = True
+    from calibre.utils.config import dynamic
+
+    dynamic.set('welcome_wizard_was_run', True)
+    orig_call = calibre.TimedPrint.__call__
+
+    def timed_call(self, *a, **kw):
+        orig_call(self, *a, **kw)
+        if a and isinstance(a[0], str) and a[0].startswith('Started up in'):
+            from qt.core import QApplication, QTimer
+
+            QTimer.singleShot(1000, QApplication.instance().quit)
+
+    calibre.TimedPrint.__call__ = timed_call
+    from qt.core import QStyleHints
+
+    if not hasattr(QStyleHints, 'colorSchemeChanged'):
+        # Qt older than 6.5, the calibre theme code cannot work, so use a
+        # simplified palette set up. Startup times are then only roughly right.
+        from calibre.gui2 import palette
+
+        def setup_styles(self):
+            self.using_calibre_style = False
+            self.on_palette_change = lambda *a, **kw: None
+
+        palette.PaletteManager.setup_styles = setup_styles
+    from calibre.gui2.main import main as gui_main
+
+    args = ['calibre', '--with-library', libpath]
+    if profile:
+        import cProfile
+
+        pr = cProfile.Profile()
+        pr.enable()
+        try:
+            gui_main(args)
+        finally:
+            pr.disable()
+            pr.dump_stats(profile)
+    else:
+        gui_main(args)
+    sys.stdout.flush()
+    os._exit(0)
 
 
 def main(argv=None):
@@ -875,17 +1046,24 @@ def main(argv=None):
     sub.add_parser('list', help='list the benchmarks')
     i = sub.add_parser('importtime', help='summarize python -X importtime')
     i.add_argument('modules', nargs='+')
+    i.add_argument('--reps', type=int, default=5)
     gu = sub.add_parser('gui', help='time the GUI main window startup (offscreen)')
     gu.add_argument('--lib', required=True)
+    gu.add_argument('--profile', default=None, help='save cProfile stats of the whole startup (main thread) to this file')
     w = sub.add_parser('_worker')
     w.add_argument('name')
     w.add_argument('lib')
-    im = sub.add_parser('_import')
-    im.add_argument('module')
+    w.add_argument('--profile', default=None)
+    pr = sub.add_parser('profile', help='run one benchmark under cProfile and print the most expensive functions')
+    pr.add_argument('--lib', required=True)
+    pr.add_argument('--bench', required=True)
+    pr.add_argument('--top', type=int, default=30)
+    pr.add_argument('--sort', default='cumulative', choices=('cumulative', 'tottime'))
     gi = sub.add_parser('_gui')
     gi.add_argument('lib')
+    gi.add_argument('--profile', default=None)
     args = ap.parse_args(argv)
-    if args.cmd in ('gen', '_worker', '_import', '_gui'):
+    if args.cmd in ('gen', '_worker', '_gui'):
         bootstrap_calibre()
 
     if args.cmd == 'gen':
@@ -893,41 +1071,60 @@ def main(argv=None):
         print(json.dumps(stats))
     elif args.cmd == 'list':
         for name, (func, modifies, desc) in BENCHMARKS.items():
-            print(f'{name:18} {"(modifies library) " if modifies else ""}{desc}')
+            print(f'{name:18} {"(runs on a copy) " if modifies else ""}{desc}')
     elif args.cmd == 'run':
         names = list(BENCHMARKS) if args.bench == 'all' else args.bench.split(',')
         for n in names:
             if n not in BENCHMARKS:
                 raise SystemExit(f'Unknown benchmark {n}, see the list command')
-        workroot = args.workdir or tempfile.mkdtemp(prefix='calibre_bench_')
+        workroot = args.workdir or tempfile.mkdtemp(prefix='calibre_bench_', dir=os.path.dirname(os.path.abspath(args.lib[0])))
         os.makedirs(workroot, exist_ok=True)
         results = run_benchmarks(args.lib, names, args.reps, workroot)
         if args.json:
             with open(args.json, 'w') as f:
                 json.dump(results, f, indent=1)
         print(format_results(results, show_tables=not args.no_tables))
+    elif args.cmd == 'profile':
+        import pstats
+
+        workroot = tempfile.mkdtemp(prefix='calibre_bench_', dir=os.path.dirname(os.path.abspath(args.lib)))
+        try:
+            func, modifies, desc = BENCHMARKS[args.bench]
+            path = args.lib
+            if modifies:
+                path = os.path.join(workroot, 'copy')
+                copy_library(args.lib, path, modifies)
+            stats_file = os.path.join(workroot, 'stats')
+            res = run_worker(args.bench, path, os.path.join(workroot, 'work'), profile=stats_file)
+            print({k: round(v, 3) for k, v in res.items() if not k.startswith('table.')})
+            pstats.Stats(stats_file).sort_stats(args.sort).print_stats(args.top)
+        finally:
+            shutil.rmtree(workroot, ignore_errors=True)
     elif args.cmd == 'importtime':
         workdir = tempfile.mkdtemp(prefix='calibre_bench_')
         for m in args.modules:
-            print(format_importtime(summarize_importtime(m, workdir)))
+            print(format_importtime(summarize_importtime(m, workdir, args.reps)))
     elif args.cmd == 'gui':
         workdir = tempfile.mkdtemp(prefix='calibre_bench_')
-        rc, wall, out, err = gui_startup(args.lib, workdir)
+        rc, wall, out, err = gui_startup(args.lib, workdir, profile=args.profile)
         print(out)
         print(err[-4000:])
         print(f'exit code {rc}, wall {wall:.1f}s')
     elif args.cmd == '_worker':
         func = BENCHMARKS[args.name][0]
-        res = func(args.lib)
+        if args.profile:
+            import cProfile
+
+            pr = cProfile.Profile()
+            res = pr.runcall(func, args.lib)
+            pr.dump_stats(args.profile)
+        else:
+            res = func(args.lib)
         print('BENCH_RESULT ' + json.dumps(res))
         sys.stdout.flush()
         os._exit(0)  # do not wait for threads of the library
-    elif args.cmd == '_import':
-        import importlib
-
-        importlib.import_module(args.module)
     elif args.cmd == '_gui':
-        raise SystemExit('not implemented yet')
+        gui_worker(args.lib, args.profile)
 
 
 

@@ -27,6 +27,7 @@ from calibre.customize.ui import run_plugins_on_import, run_plugins_on_postadd, 
 from calibre.db import SPOOL_SIZE, _get_next_series_num_for_list
 from calibre.db.annotations import merge_annotations
 from calibre.db.book_storage import BookStorageEntry
+from calibre.db.change import ChangeRecord
 from calibre.db.categories import CategoriesCache, CategoriesInvalidatingLock, get_categories, items_of_books
 from calibre.db.constants import COVER_FILE_NAME, DATA_DIR_NAME, NOTES_DIR_NAME, Pages
 from calibre.db.errors import BooksNotRemoved, NoSuchBook, NoSuchFormat
@@ -198,6 +199,8 @@ class Cache:
         self.format_metadata_cache = defaultdict(dict)
         self.formatter_template_cache = {}
         self.dirtied_cache = {}
+        self._active_change = None
+        self.change_listeners = []  # called with the ChangeRecord after each outermost _change() commits
         self.link_maps_cache = {}
         self.extra_files_cache = {}
         self.vls_for_books_cache = None
@@ -1968,6 +1971,71 @@ class Cache:
 
     _check_dirtied_annotations = check_dirtied_annotations
 
+    @contextmanager
+    def _change(self):
+        """
+        The unit of work of the write path, see calibre.db.change for the design. Must be used with the write lock held.
+        Yields the ChangeRecord to be filled in by the write code.
+        """
+        parent = self._active_change
+        record = self._active_change = ChangeRecord()
+        try:
+            with self.backend.notes.deferred_file_operations(), self.backend.conn:
+                yield record
+        except BaseException:
+            try:
+                self._rollback_change(record)
+            finally:
+                self._active_change = parent
+                if parent is not None:
+                    parent.merge(record)
+            raise
+        self._active_change = parent
+        if parent is not None:
+            parent.merge(record)
+        else:
+            self._apply_change(record)
+
+    def _rollback_change(self, record):
+        # The SQL was rolled back by the transaction, make the in memory state and the files match it
+        books = record.book_ids or None
+        try:
+            size_table = self.backend.tables['size']
+            for table in record.tables.values():
+                if table is not size_table:
+                    self.backend._read_table(table, table.read, self.backend)
+            if size_table in record.tables.values():
+                # Read from the scan of the data table done by the formats table when it was re-read
+                self.backend._read_table(size_table, self.backend._read_size_table)
+        finally:
+            for func in record.rollback_callbacks:
+                try:
+                    func()
+                except Exception:
+                    traceback.print_exc()
+            for name in record.fields:
+                self.categories_cache.field_changed(name)
+            self.clear_link_map_cache(books)
+            if self.composites:
+                self._clear_composite_caches(books)
+            self._clear_search_caches(books)
+
+    def _apply_change(self, record):
+        error = None
+        for name, (books, items, report_books) in record.fields.items():
+            self.categories_cache.field_changed(name, items, books if report_books else None)
+        calls = [*record.callbacks, *(partial(listener, record) for listener in self.change_listeners)]
+        for func in calls:
+            try:
+                func()
+            except Exception as e:
+                if error is None:
+                    error = e
+                else:
+                    traceback.print_exc()
+        if error is not None:
+            raise error
+
     @quiet_write_api
     def set_field(self, name, book_id_to_val_map, allow_case_change=True, do_path_update=True):
         """
@@ -2008,31 +2076,38 @@ class Cache:
         # cached categories can be refreshed without recomputing every item.
         # Only fields with items can be categories, or be depended on by them.
         touched_items = items_of_books(f.table.book_col_map, book_id_to_val_map) if f.is_many else None
-        try:
+        with self._change() as change:
+            change.modifies(f.table, self.fields['last_modified'].table)
+            if name == 'title':
+                change.modifies(self.fields['sort'].table)
+            elif name == 'authors':
+                change.modifies(self.fields['author_sort'].table)
+            if is_series:
+                sf = self.fields[f.name + '_index']
+                change.modifies(sf.table)
+            # Until the writer reports the books it changed this is all that is known
+            change.touch(name, book_id_to_val_map.keys(), (), f.is_many)
             dirtied = f.writer.set_books(book_id_to_val_map, self.backend, allow_case_change=allow_case_change)
-        except Exception:
-            # The in memory tables may have been changed before the failure, so
-            # the cached categories must not be refreshed incrementally
-            self.categories_cache.field_changed(name)
-            raise
-        if f.is_many:
-            items_of_books(f.table.book_col_map, book_id_to_val_map, touched_items)
-            # A case change also affects the books of the renamed item, which
-            # are in dirtied
-            self.categories_cache.field_changed(name, touched_items, dirtied | book_id_to_val_map.keys())
-        else:
-            self.categories_cache.field_changed(name)
+            if f.is_many:
+                items_of_books(f.table.book_col_map, book_id_to_val_map, touched_items)
+                # A case change also affects the books of the renamed item, which
+                # are in dirtied
+                change.touch(name, dirtied | book_id_to_val_map.keys(), touched_items)
+            else:
+                change.touch(name, dirtied | book_id_to_val_map.keys(), None, False)
 
-        if is_series and simap:
-            sf = self.fields[f.name + '_index']
-            dirtied |= sf.writer.set_books(simap, self.backend, allow_case_change=False)
+            if is_series and simap:
+                dirtied |= sf.writer.set_books(simap, self.backend, allow_case_change=False)
 
-        if dirtied:
-            if update_path and do_path_update:
-                self._update_path(dirtied, mark_as_dirtied=False)
-            self._mark_as_dirty(dirtied)
-            self._clear_link_map_cache(dirtied)
-            self.event_dispatcher(EventType.metadata_changed, name, dirtied)
+            if dirtied:
+                self._mark_as_dirty(dirtied)
+                if update_path and do_path_update:
+                    # Moves the folders of the books, which cannot be rolled back.
+                    # Residual: it runs after the field is committed, so a failure
+                    # leaves the new value in place with the old folder names.
+                    change.after_commit(partial(self._update_path, dirtied, mark_as_dirtied=False))
+                change.after_commit(partial(self._clear_link_map_cache, dirtied))
+                change.after_commit(partial(self.event_dispatcher, EventType.metadata_changed, name, dirtied))
         return dirtied
 
     _set_field = set_field
@@ -2449,7 +2524,7 @@ class Cache:
 
     _set_metadata = set_metadata
 
-    def _do_add_format(self, book_id, fmt, stream, name=None, mtime=None):
+    def _do_add_format(self, book_id, fmt, stream, name=None, mtime=None, change=None):
         path = self._get_book_path(book_id, unsafe=True)
         if path is None:
             # Theoretically, this should never happen, but apparently it
@@ -2463,13 +2538,21 @@ class Cache:
         except IndexError:
             author = _('Unknown')
 
-        size, fname = self.backend.add_format(book_id, fmt, stream, title, author, path, name, mtime=mtime)
+        size, fname = self.backend.add_format(book_id, fmt, stream, title, author, path, name, mtime=mtime, change=change)
         return size, fname
 
-    def _record_format_added(self, book_id, fmt, fname, size):
+    def _record_format_added(self, book_id, fmt, fname, size, change=None):
         # Updates the formats and size of the book for a format file that has
         # been added and reports the change to the cache of computed
-        # categories, so that callers can use the quiet write lock.
+        # categories, so that callers can use the quiet write lock. With a
+        # ChangeRecord the change is reported by it, and rolled back with it.
+        if change is not None:
+            change.modifies(self.fields['formats'].table, self.fields['size'].table)
+            change.touch('formats', (book_id,), (fmt,))
+            change.touch('size', (book_id,), None)
+            max_size = self.fields['formats'].table.update_fmt(book_id, fmt, fname, size, self.backend)
+            self.fields['size'].table.update_sizes({book_id: max_size})
+            return
         try:
             max_size = self.fields['formats'].table.update_fmt(book_id, fmt, fname, size, self.backend)
             self.fields['size'].table.update_sizes({book_id: max_size})
@@ -2532,16 +2615,18 @@ class Cache:
                 stream = open(make_long_path_useable(stream_or_path), 'rb')
                 needs_close = True
             try:
-                size, fname = self._do_add_format(book_id, fmt, stream, name)
+                with self._change() as change:
+                    change.modifies(self.fields['last_modified'].table)
+                    # The format file is staged and only replaced after the commit
+                    size, fname = self._do_add_format(book_id, fmt, stream, name, change=change)
+                    self._record_format_added(book_id, fmt, fname, size, change)
+                    self._update_last_modified((book_id,))
+                    self._queue_pages_scan(book_id)
+                    change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
             finally:
                 if needs_close:
                     stream.close()
             del stream
-
-            self._record_format_added(book_id, fmt, fname, size)
-            self._update_last_modified((book_id,))
-            self._queue_pages_scan(book_id)
-            self.event_dispatcher(EventType.format_added, book_id, fmt)
 
         if run_hooks:
             # Run post import plugins, the write lock is released so the plugin
@@ -2571,9 +2656,9 @@ class Cache:
             for fmt in fmts:
                 self.format_metadata_cache[book_id].pop(fmt, None)
 
+        removes = defaultdict(set)
+        metadata_map = {}
         if not db_only:
-            removes = defaultdict(set)
-            metadata_map = {}
             for book_id, fmts in formats_map.items():
                 try:
                     path = self._get_book_path(book_id)
@@ -2591,23 +2676,29 @@ class Cache:
                         'title': self._field_for('title', book_id),
                         'authors': self._field_for('authors', book_id),
                     }
-            if removes:
-                removed_map = self.backend.remove_formats(removes, metadata_map)
-
-        size_map = table.remove_formats(formats_map, self.backend)
-        self.fields['size'].table.update_sizes(size_map)
-
-        for book_id, fmts in formats_map.items():
-            for fmt in fmts:
-                run_plugins_on_postdelete(self, book_id, fmt)
-
-        self._update_last_modified(tuple(formats_map))
-        for book_id in formats_map:
-            self._queue_pages_scan(book_id)
-        self.event_dispatcher(EventType.formats_removed, formats_map)
+        with self._change() as change:
+            change.modifies(table, self.fields['size'].table, self.fields['last_modified'].table)
+            if not db_only and removes:
+                # The files are moved to the trash only after the rows are deleted and committed
+                removed_map = self.backend.remove_formats(removes, metadata_map, change=change)
+            for book_id, fmts in formats_map.items():
+                change.touch('formats', (book_id,), fmts)
+            change.touch('size', formats_map, None)
+            size_map = table.remove_formats(formats_map, self.backend)
+            self.fields['size'].table.update_sizes(size_map)
+            self._update_last_modified(tuple(formats_map))
+            for book_id in formats_map:
+                self._queue_pages_scan(book_id)
+            change.after_commit(partial(self._run_postdelete_plugins, formats_map))
+            change.after_commit(partial(self.event_dispatcher, EventType.formats_removed, formats_map))
         return removed_map
 
     _remove_formats = remove_formats
+
+    def _run_postdelete_plugins(self, formats_map):
+        for book_id, fmts in formats_map.items():
+            for fmt in fmts:
+                run_plugins_on_postdelete(self, book_id, fmt)
 
     @read_api
     def get_next_series_num_for(self, series, field='series', current_indices=False):

@@ -802,8 +802,78 @@ by William Shakespeare
 
 
 # Run tests {{{
+# Index based shortcuts vs the generic code {{{
+_TAGS = ['div', 'p', 'span', 'li', 'ul', 'em', 'b', 'h2', 'a', 'blockquote']
+_CLS = ['c%d' % i for i in range(8)] + ['C1', 'C2']
+_IDS = ['i%d' % i for i in range(6)]
+def _gen_doc(rng):
+    n = rng.randint(5, 70)
+    root = etree.Element('html'); body = etree.SubElement(root, 'body')
+    els = [body]
+    for _ in range(n):
+        par = rng.choice(els)
+        e = etree.SubElement(par, rng.choice(_TAGS + [t.upper() for t in _TAGS[:2]]))
+        if rng.random() < .6: e.set('class', ' '.join(rng.choice(_CLS) for _ in range(rng.randint(1, 3))))
+        if rng.random() < .15: e.set('id', rng.choice(_IDS))
+        if rng.random() < .1: e.set('data-k', 'v%d' % rng.randint(0, 3))
+        if rng.random() < .1: e.set('lang', rng.choice(['en', 'fr']))
+        if rng.random() < .3: e.text = 't'
+        if rng.random() < .1: par.append(etree.Comment('c'))
+        els.append(e)
+    return root
+def _simple(rng):
+    r = rng.random()
+    t = rng.choice(_TAGS)
+    c = rng.choice(_CLS + ['nosuch'])
+    if r < .25: return '.' + c
+    if r < .4: return t + '.' + c
+    if r < .5: return '#' + rng.choice(_IDS + ['nosuch'])
+    if r < .58: return t + '#' + rng.choice(_IDS)
+    if r < .66: return t
+    if r < .72: return '.%s.%s' % (c, rng.choice(_CLS))
+    if r < .76: return '*'
+    if r < .8: return '*.' + c
+    if r < .84: return '%s[data-k="v%d"]' % (t, rng.randint(0, 3))
+    if r < .87: return '%s:first-child' % t
+    if r < .9: return '%s:nth-child(%dn+%d)' % (t, rng.randint(1, 4), rng.randint(0, 2))
+    if r < .92: return '.%s:last-of-type' % c
+    if r < .94: return '%s:nth-last-child(%d)' % (t, rng.randint(1, 3))
+    if r < .95: return '%s:only-child' % t
+    if r < .96: return '.%s:not(.%s)' % (c, rng.choice(_CLS))
+    if r < .97: return '%s:nth-of-type(odd)' % t
+    if r < .98: return '.%s:hover' % c
+    return '%s:lang(en)' % t
+def _sel(rng):
+    s = _simple(rng)
+    for _ in range(rng.choice([0, 0, 1, 1, 2, 3])):
+        s = s + rng.choice([' ', ' > ', ' + ', ' ~ ']) + _simple(rng) if rng.random() < .5 else _simple(rng) + rng.choice([' ', ' > ', ' + ', ' ~ ']) + s
+    if rng.random() < .08: s += ', ' + _simple(rng)
+    return s
+
+
+class TestIndexEquivalence(unittest.TestCase):
+
+    def test_index_matches_generic_code(self):
+        ''' The id/class/tag bucket and document order shortcuts of Select
+        (use_index) must return exactly what the generic code returns, in the same order. '''
+        import random
+        rng = random.Random(7)
+        for d in range(120):
+            root = _gen_doc(rng)
+            order = {e: i for i, e in enumerate(root.iter('*'))}
+            fast, slow = Select(root, ignore_inappropriate_pseudo_classes=True), Select(root, ignore_inappropriate_pseudo_classes=True)
+            self.assertTrue(fast.use_index)
+            slow.use_index = False
+            for k in range(30):
+                q = _sel(rng)
+                a, b = [order[e] for e in fast(q)], [order[e] for e in slow(q)]
+                self.assertEqual(a, b, f'doc {d}: {q}')
+# }}}
+
+
 def find_tests():
-    return unittest.defaultTestLoader.loadTestsFromTestCase(TestCSSSelectors)
+    ld = unittest.defaultTestLoader
+    return unittest.TestSuite([ld.loadTestsFromTestCase(TestCSSSelectors), ld.loadTestsFromTestCase(TestIndexEquivalence)])
 
 
 def run_tests(find_tests=find_tests, for_build=False):

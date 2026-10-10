@@ -23,10 +23,21 @@ class HeuristicProcessor:
         self.blanks_deleted = False
         self.blanks_between_paragraphs = False
         self.linereg = re.compile(r'(?<=<p).*?(?=</p>)', re.IGNORECASE | re.DOTALL)
-        self.blankreg = re.compile(r'\s*(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*(?P<closeline></p>)', re.IGNORECASE)
-        self.anyblank = re.compile(r'\s*(?P<openline><p[^>]*>)\s*(?P<closeline></p>)', re.IGNORECASE)
-        self.multi_blank = re.compile(r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}(?!\s*<h\d)', re.IGNORECASE)
-        self.any_multi_blank = re.compile(r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}', re.IGNORECASE)
+        # Whitespace before the first tag of these patterns is only matched from
+        # the start of a run of whitespace, (?<!\s)\s*+, and all whitespace is
+        # matched possessively. The tags that follow it start with <, so
+        # giving back whitespace never helps a match, and a match that starts
+        # inside a run of whitespace is the same as the one that starts at its
+        # start. Without this the engine retries every start position in a run
+        # of whitespace (quadratic) and, in the multi_blank patterns, every
+        # way of dividing the whitespace between the \s* that end one
+        # repetition and start the next (exponential). Matches and groups are
+        # unchanged, see the test in regex_safety_test.py.
+        self.blankreg = re.compile(r'(?<!\s)\s*+(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
+        self.anyblank = re.compile(r'(?<!\s)\s*+(?P<openline><p[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
+        self.multi_blank = re.compile(
+            r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}(?!\s*<h\d)', re.IGNORECASE)
+        self.any_multi_blank = re.compile(r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}', re.IGNORECASE)
         self.line_open = (
             r'<(?P<outer>p|div)[^>]*>(\s*<(?P<inner1>font|span|[ibu])[^>]*>)?'
             r'(\s*<(?P<inner2>font|span|[ibu])[^>]*>)?(\s*<(?P<inner3>font|span|[ibu])[^>]*>)?\s*'
@@ -252,7 +263,24 @@ class HeuristicProcessor:
         n_lookahead_open = r'(?!\s*'
         n_lookahead_close = r')\s*'
 
-        default_title = r"(<[ibu][^>]*>)?\s{0,3}(?!Chapter)([\w\:\'’\"-]+\s{0,3}){1,5}?(</[ibu][^>]*>)?(?=<)"
+        # Whitespace repeats around the tags of the heading lines are possessive:
+        # each is followed by a < (or by whitespace that another repeat takes
+        # first), so giving whitespace back never produces a different match
+        # (the chap and title groups start and end at the same places), it only
+        # made the engine try every way of dividing a run of whitespace
+        # between neighbouring repeats.
+        def possessive_ws(pattern):
+            return pattern.replace(r'\s*', r'\s*+')
+
+        chapter_line_open = possessive_ws(chapter_line_open)
+        chapter_line_close = possessive_ws(chapter_line_close)
+        title_line_open = possessive_ws(title_line_open)
+        title_line_close = possessive_ws(title_line_close)
+        chapter_header_close = possessive_ws(chapter_header_close)
+        blank_lines = possessive_ws(blank_lines)
+        n_lookahead_close = possessive_ws(n_lookahead_close)
+
+        default_title = r"(<[ibu][^>]*>)?\s{0,3}(?!Chapter)([\w\:\'’\"-]++\s{0,3}+){1,5}?(</[ibu][^>]*>)?(?=<)"
         simple_title = r'(<[ibu][^>]*>)?\s{0,3}(?!(Chapter|\s+<)).{0,65}?(</[ibu][^>]*>)?(?=<)'
 
         analysis_result = []
@@ -261,7 +289,7 @@ class HeuristicProcessor:
             [
                 (
                     r"[^'\"]?(Introduction|Synopsis|Acknowledgements|Epilogue|CHAPTER|Kapitel|Volume\b|Prologue|Book\b|Part\b|Dedication|Preface)"
-                    r"\s*([\d\w-]+\:?\'?\s*){0,5}"
+                    r"\s*+([\d\w-]++\:?+\'?+\s*+){0,5}"
                 ),
                 True,
                 True,
@@ -272,7 +300,7 @@ class HeuristicProcessor:
             ],
             # Highest frequency headings which include titles
             [
-                r"[^'\"]?(CHAPTER|Kapitel)\s*([\dA-Z\-\'\"\?!#,]+\s*){0,7}\s*",
+                r"[^'\"]?(CHAPTER|Kapitel)\s*+([\dA-Z\-\'\"\?!#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -281,7 +309,10 @@ class HeuristicProcessor:
                 'chapter',
             ],
             [
-                r'<b[^>]*>\s*(<span[^>]*>)?\s*(?!([*#•=]+\s*)+)(\s*(?=[\d.\w#\-*\s]+<)([\d.\w#-*]+\s*){1,5}\s*)(?!\.)(</span>)?\s*</b>',
+                # (?!([*#•=]+\s*)+) was true when the next character is not one of *#•=, but the
+                # whitespace before it gives characters back, so it only ever failed when no whitespace
+                # came before it: (?!(?<!\s)([*#•=])) says that without the nested repeats.
+                r'<b[^>]*>\s*+(<span[^>]*>)?\s*+(?!(?<!\s)([*#•=]))(\s*+(?=[\d.\w#\-*\s]++<)([\d.\w#-*]++\s*+){1,5}\s*+)(?!\.)(</span>)?\s*+</b>',
                 True,
                 True,
                 True,
@@ -290,7 +321,7 @@ class HeuristicProcessor:
                 'emphasized',
             ],  # Emphasized lines
             [
-                r"[^'\"]?(\d+(\.|:))\s*([\w\-\'\"#,]+\s*){0,7}\s*",
+                r"[^'\"]?(\d++(\.|:))\s*+([\w\-\'\"#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -299,7 +330,7 @@ class HeuristicProcessor:
                 'numeric',
             ],  # Numeric Chapters
             [
-                r'([A-Z]\s+){3,}\s*([\d\w-]+\s*){0,3}\s*',
+                r'([A-Z]\s++){3,}\s*+([\d\w-]++\s*+){0,3}\s*+',
                 True,
                 True,
                 True,
@@ -308,7 +339,7 @@ class HeuristicProcessor:
                 'letter_spaced',
             ],  # Spaced Lettering
             [
-                r"[^'\"]?(\d+\.?\s+([\d\w-]+\:?\'?-?\s?){0,5})\s*",
+                r"[^'\"]?(\d++\.?+\s++([\d\w-]++\:?+\'?+-?+\s?+){0,5})\s*+",
                 True,
                 True,
                 True,
@@ -317,7 +348,7 @@ class HeuristicProcessor:
                 'numeric_title',
             ],  # Numeric Titles
             [
-                r"[^'\"]?(\d+)\s*([\dA-Z\-\'\"\?!#,]+\s*){0,7}\s*",
+                r"[^'\"]?(\d++)\s*+([\dA-Z\-\'\"\?!#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -326,7 +357,7 @@ class HeuristicProcessor:
                 'plain_number',
             ],  # Numeric Chapters, no dot or colon
             [
-                r"\s*[^'\"]?([A-Z#]+(\s|-){0,3}){1,5}\s*",
+                r"\s*[^'\"]?([A-Z#]++(\s|-){0,3}+){1,5}\s*+",
                 False,
                 True,
                 False,
@@ -537,7 +568,13 @@ class HeuristicProcessor:
         pre = re.compile(r'<pre>', re.IGNORECASE)
         if len(pre.findall(html)) >= 1:
             self.log.debug('Running Text Processing')
-            outerhtml = re.compile(r'.*?(?<=<pre>)(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
+            # Each match starts where the previous one ended (after a </pre>) or at the
+            # start of the document, so the lazy prefix of the old pattern is not needed.
+            # The atomic group keeps the first <pre> after that point: if no </pre> follows
+            # it, none follows a later <pre> either, so the backtracking this removes never
+            # found a match. The anchor stops every position inside an unclosed <pre> from
+            # scanning to the end of the document.
+            outerhtml = re.compile(r'(?:\A|(?<=</pre>))(?>.*?(?<=<pre>))(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
             html = outerhtml.sub(self.txt_process, html)
             from calibre.ebooks.conversion.preprocess import convert_entities
 
@@ -551,8 +588,11 @@ class HeuristicProcessor:
         return html
 
     def arrange_htm_line_endings(self, html):
-        html = re.sub(r'\s*</(?P<tag>p|div)>', r'</\g<tag>' + '>\n', html)
-        html = re.sub(r'\s*<(?P<tag>p|div)(?P<style>[^>]*)>\s*', r'\n<\g<tag>\g<style>' + '>', html)
+        # See the comment on blankreg for (?<!\s)\s*+. The second pattern also
+        # matches the whitespace after the tag, so the next match starts at the
+        # end of a run of whitespace, which is what the (?<=\s)(?!\s) is for.
+        html = re.sub(r'(?<!\s)\s*+</(?P<tag>p|div)>', r'</\g<tag>' + '>\n', html)
+        html = re.sub(r'(?:(?<!\s)\s*+|(?<=\s)(?!\s))<(?P<tag>p|div)(?P<style>[^>]*)>\s*+', r'\n<\g<tag>\g<style>' + '>', html)
         return html
 
     def fix_nbsp_indents(self, html):
@@ -574,10 +614,16 @@ class HeuristicProcessor:
         html = re.sub(r'<p[^>/]*/>', '<p> </p>', html)
         # Get rid of empty span, bold, font, em, & italics tags
         fmt_tags = 'font|[ibu]|em|strong'
-        open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*)?>', f'</(?:{fmt_tags})>'
+        open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*+)?>', f'</(?:{fmt_tags})>'
+        # Each \s* here is followed by a tag, or ends the match, and tags start with <,
+        # so giving back whitespace never helps and \s*+ gives the same matches. A
+        # match starts at the start of a whitespace run (?<!\s), or at its end
+        # (?<=\s)(?!\s), where the previous match stopped after it consumed the run.
+        # Without these, every split of a run between the tags was tried, which is
+        # cubic on padded empty tags.
         for i in range(2):
-            html = re.sub(r'\s*<span[^>]*>\s*(<span[^>]*>\s*</span>){0,2}\s*</span>\s*', ' ', html)
-            html = re.sub(rf'\s*{open_fmt_pat}\s*({open_fmt_pat}\s*{close_fmt_pat}\s*){{0,2}}\s*{close_fmt_pat}', ' ', html)
+            html = re.sub(r'(?:(?<!\s)|(?<=\s)(?!\s))\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
+            html = re.sub(rf'(?:(?<!\s)|(?<=\s)(?!\s))\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
         # delete surrounding divs from empty paragraphs
         html = re.sub(r'<div[^>]*>\s*<p[^>]*>\s*</p>\s*</div>', '<p> </p>', html)
         # Empty heading tags
@@ -648,9 +694,13 @@ class HeuristicProcessor:
             r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
+        # Each \s* is followed by a tag (which starts with <) or by the content, so
+        # possessive \s*+ gives the same matches. The {1,} repeats stay greedy: with
+        # fewer repeats, the content can start at the last blank paragraph (an empty
+        # scene break), and that match must still be found.
         blanks_around_scene_breaks = re.compile(
-            r'(?P<initparas>(<(p|div)[^>]*>\s*</(p|div)>\s*){1,}\s*)?'
-            r'(?P<content><p class="scenebreak"[^>]*>.*?</p>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
+            r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
+            r'(?P<content><p class="scenebreak"[^>]*+>.*?</p>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
         blanks_n_nopunct = re.compile(
@@ -1027,11 +1077,16 @@ class HeuristicProcessor:
         # If still no sections after unwrapping mark split points on lines with no punctuation
         if self.html_preprocess_sections < self.min_chapters and getattr(self.extra_opts, 'markup_chapter_headings', False):
             self.log.debug('Looking for more split points based on punctuation, currently have ' + str(self.html_preprocess_sections))
+            # (?!([\W]+\s*)+) is true when the next character is not \W, which is what (?!(\W)) says
+            # (the group stays so that the group numbers do not change) without trying every way of dividing a run of \W between the nested repeats. The
+            # whitespace and token repeats are possessive: each is followed by a character it
+            # cannot match (<, a token character, or the end of the token run), so giving
+            # characters back never produces a different match.
             chapdetect3 = re.compile(
-                r'<(?P<styles>(p|div)[^>]*)>\s*(?P<section>(<span[^>]*>)?\s*(?!([\W]+\s*)+)'
-                r'(<[ibu][^>]*>){0,2}\s*(<span[^>]*>)?\s*(<[ibu][^>]*>){0,2}\s*(<span[^>]*>)?\s*'
-                r'.?(?=[a-z#\-*\s]+<)([a-z#-*]+\s*){1,5}\s*\s*(</span>)?(</[ibu]>){0,2}\s*'
-                r'(</span>)?\s*(</[ibu]>){0,2}\s*(</span>)?\s*</(p|div)>)',
+                r'<(?P<styles>(p|div)[^>]*)>\s*+(?P<section>(<span[^>]*>)?\s*+(?!(\W))'
+                r'(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+'
+                r'.?(?=[a-z#\-*\s]++<)([a-z#-*]++\s*+){1,5}\s*+(</span>)?(</[ibu]>){0,2}\s*+'
+                r'(</span>)?\s*+(</[ibu]>){0,2}\s*+(</span>)?\s*+</(p|div)>)',
                 re.IGNORECASE,
             )
             html = chapdetect3.sub(self.chapter_break, html)

@@ -952,8 +952,6 @@ SLOW_CASES = {
         'quadratic, 0.8 s for n=400, 3.6 s for n=800: utils.py:656 blanks_around_scene_breaks, (<p>\\s*</p>\\s*){1,}\\s*',
     ('HeuristicProcessor(scene breaks)', 'newlines', 1000):
         'quadratic, 0.8 s for n=400, 2.9 s for n=800: utils.py:656, a run of blank lines',
-    ('HeuristicProcessor(all heuristics)', 'spaces', 8000):
-        'quadratic, 0.6 s for n=4000, 2.2 s for n=8000: utils.py:26 blankreg and :27 anyblank start with \\s*, which is retried at every space',
     ('DocAnalysis(txt)', 'unclosed_tags', 2000):
         'quadratic in the length of a text without line breaks, 0.7 s for n=800, 3 s for n=1600: preprocess.py:96 .*?\\n',
     ('txt.detect_paragraph_type', 'unclosed_tags', 2000):

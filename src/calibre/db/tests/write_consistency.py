@@ -1110,10 +1110,6 @@ KNOWN_INCONSISTENT = known_table(
     ('update_path', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
     )),
-    # DATA LOSS: with delete_first the old data of the plugin is deleted and committed before the new data is inserted, so a failure of the insert loses the old data
-    ('add_custom_book_data', {'not-atomic'}, (
-        'sql:insert or replace into books_plugin_data (book, name, val) values (?, ?, ?)@1',
-    )),
     # The saved searches are stored in the preferences. The in-memory copy is changed before the preference is written
     ('saved_search_delete', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',

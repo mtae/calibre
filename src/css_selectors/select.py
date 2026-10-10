@@ -515,22 +515,45 @@ def select_element(cache, selector):
             yield elem
 
 
+def filter_bucket(cache, items, inner):
+    ''' The elements of items (a bucket of the id or class map, in document
+    order) that also match inner, in document order. Equivalent to
+    ``(e for e in cache.iterparsedselector(inner) if e in items)``, but starts
+    from the bucket instead of enumerating every element of the document when
+    inner is the universal selector or a tag name, as Servo's SelectorMap does
+    by looking up the rules for the id, class and tag of the element. '''
+    if cache.use_index and type(inner) is Element:
+        name = inner.element
+        if not name or name == '*':
+            yield from items
+            return
+        tagged = cache.element_map[ascii_lower(name)]
+        if len(items) <= len(tagged):
+            for elem in items:
+                if elem in tagged:
+                    yield elem
+        else:
+            for elem in tagged:
+                if elem in items:
+                    yield elem
+        return
+    for elem in cache.iterparsedselector(inner):
+        if elem in items:
+            yield elem
+
+
 def select_hash(cache, selector):
     'An id selector'
     items = cache.id_map[ascii_lower(selector.id)]
     if len(items) > 0:
-        for elem in cache.iterparsedselector(selector.selector):
-            if elem in items:
-                yield elem
+        yield from filter_bucket(cache, items, selector.selector)
 
 
 def select_class(cache, selector):
     'A class selector'
     items = cache.class_map[ascii_lower(selector.class_name)]
     if items:
-        for elem in cache.iterparsedselector(selector.selector):
-            if elem in items:
-                yield elem
+        yield from filter_bucket(cache, items, selector.selector)
 
 
 def select_negation(cache, selector):

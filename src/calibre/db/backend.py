@@ -1919,7 +1919,8 @@ class DB:
         atomic_rename(src_path, dest_path)
         return os.path.getsize(dest_path)
 
-    def remove_formats(self, remove_map, metadata_map):
+    def remove_formats(self, remove_map, metadata_map, change=None):
+        # If change (a ChangeRecord) is given, the files are moved to the trash when the change commits
         self.ensure_trash_dir()
         removed_map = {}
         for book_id, removals in remove_map.items():
@@ -1931,7 +1932,10 @@ class DB:
                     paths.add(path)
                     removed_map[book_id].add(fmt.upper())
             if paths:
-                self.move_book_files_to_trash(book_id, paths, metadata_map[book_id])
+                if change is None:
+                    self.move_book_files_to_trash(book_id, paths, metadata_map[book_id])
+                else:
+                    change.after_commit(partial(self.move_book_files_to_trash, book_id, paths, metadata_map[book_id]))
         return removed_map
 
     def cover_last_modified(self, path) -> datetime | None:
@@ -2116,7 +2120,9 @@ class DB:
                 if os.path.exists(spath):
                     windows_check_if_files_in_use(spath)
 
-    def add_format(self, book_id, fmt, stream, title, author, path, current_name, mtime=None):
+    def add_format(self, book_id, fmt, stream, title, author, path, current_name, mtime=None, change=None):
+        # If change (a ChangeRecord) is given, the new contents are only staged in a temporary file here and the existing files are
+        # replaced when the change commits (change.after_commit()), the staged file is removed if the change fails.
         fmt = ('.' + fmt.lower()) if fmt else ''
         fname = self.construct_file_name(book_id, title, author, len(fmt))
         path = os.path.join(self.library_path, path)
@@ -2140,45 +2146,62 @@ class DB:
                     os.remove(tmp_path)
                 raise
             stream = tmp_path
-        if current_name is not None:
-            old_path = os.path.join(path, current_name + fmt)
-            if old_path != dest:
-                # Ensure that the old format file is not orphaned, this can
-                # happen if the algorithm in construct_file_name is changed.
-                try:
-                    # rename rather than remove, so that if something goes
-                    # wrong in the rest of this function, at least the file is
-                    # not deleted
-                    os.replace(old_path, dest)
-                except OSError as e:
-                    if getattr(e, 'errno', None) != errno.ENOENT:
-                        # Failing to rename the old format will at worst leave a
-                        # harmless orphan, so log and ignore the error
-                        import traceback
+        def finish():
+            if current_name is not None:
+                old_path = os.path.join(path, current_name + fmt)
+                if old_path != dest:
+                    # Ensure that the old format file is not orphaned, this can
+                    # happen if the algorithm in construct_file_name is changed.
+                    try:
+                        # rename rather than remove, so that if something goes
+                        # wrong in the rest of this function, at least the file is
+                        # not deleted
+                        os.replace(old_path, dest)
+                    except OSError as e:
+                        if getattr(e, 'errno', None) != errno.ENOENT:
+                            # Failing to rename the old format will at worst leave a
+                            # harmless orphan, so log and ignore the error
+                            import traceback
 
-                        traceback.print_exc()
+                            traceback.print_exc()
 
-        if isinstance(stream, str) and stream:
-            try:
+            if isinstance(stream, str) and stream:
                 try:
-                    os.replace(stream, dest)
-                except OSError:
-                    if iswindows:
-                        time.sleep(1)
+                    try:
                         os.replace(stream, dest)
-                    else:
-                        raise
-            except BaseException:
-                if tmp_path is not None:
+                    except OSError:
+                        if iswindows:
+                            time.sleep(1)
+                            os.replace(stream, dest)
+                        else:
+                            raise
+                except BaseException:
+                    if tmp_path is not None:
+                        with suppress(OSError):
+                            os.remove(tmp_path)
+                    raise
+            elif os.path.exists(dest):
+                # the stream is the format file itself
+                if mtime is not None:
+                    os.utime(dest, (mtime, mtime))
+
+        if change is None:
+            finish()
+            if isinstance(stream, str) and stream or os.path.exists(dest):
+                size = os.path.getsize(dest)
+        else:
+            if isinstance(stream, str) and stream:
+                if tmp_path is None and os.path.exists(stream):
+                    size = os.path.getsize(stream)
+            elif os.path.exists(dest):
+                size = os.path.getsize(dest)
+            change.after_commit(finish)
+            if tmp_path is not None:
+                def remove_staged():
                     with suppress(OSError):
                         os.remove(tmp_path)
-                raise
-            size = os.path.getsize(dest)
-        elif os.path.exists(dest):
-            # the stream is the format file itself
-            size = os.path.getsize(dest)
-            if mtime is not None:
-                os.utime(dest, (mtime, mtime))
+
+                change.on_rollback(remove_staged)
 
         return size, fname
 

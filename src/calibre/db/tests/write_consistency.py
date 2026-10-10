@@ -765,13 +765,6 @@ KNOWN_INCONSISTENT = known_table(
         'file:backend.set_cover@1/after',
         'sql:update books set has_cover=? where id=?@1',
     )),
-    ('create_book_entry', {'field:timestamp'}, (
-        'sql:update books set timestamp=? where id=?@1',
-    )),
-    ('create_book_entry', {'composite-cache', 'field:tags'}, (
-        'sql:delete from books_tags_link where book=?@1',
-        'sql:insert into books_tags_link(book,tag) values(?, ?)@1',
-    )),
     # The note was written to the database but not its backup file
     ('import_note', {'note-backup-missing'}, (
         'file:notes.set_backup_for@1',
@@ -786,9 +779,6 @@ KNOWN_INCONSISTENT = known_table(
         'sql:update books set title=? where id=?@1',
         'sql:insert into authors(name,sort) values (?,?)@1',
         'sql:update books set path=? where id=?@1',
-    )),
-    ('move_book_from_trash', {'field:timestamp'}, (
-        'sql:update books set timestamp=? where id=?@1',
     )),
     ('move_book_from_trash', {'stray-cover'}, (
         'file:copy_tree@1/after',
@@ -939,11 +929,6 @@ KNOWN_INCONSISTENT = known_table(
     ('saved_search_add', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',
     )),
-    # The authors are changed (and committed) first, then the folder of the book is moved
-    ('set_authors', {'field:authors'}, (
-        'sql:delete from books_authors_link where book=?@1',
-        'sql:insert into books_authors_link(book,author) values(?, ?)@1',
-    )),
     ('set_authors', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',
         'sql:update data set name=? where book=? and format=?@1',
@@ -956,67 +941,23 @@ KNOWN_INCONSISTENT = known_table(
     ('set_authors', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
     )),
-    # The cover file is written before has_cover is updated
+    # The cover file is written before has_cover is updated, and has_cover is rolled back with the last_modified of the book
     ('set_cover_new', {'stray-cover'}, (
         'file:backend.set_cover@1/after',
         'sql:update books set has_cover=? where id=?@1',
+        'sql:update books set last_modified=? where id=?@1',
     )),
     # The cover file is deleted before has_cover is updated
     ('set_cover_remove', {'cover-file-missing'}, (
         'file:backend.set_cover@1/after',
         'sql:update books set has_cover=? where id=?@1',
+        'sql:update books set last_modified=? where id=?@1',
     )),
     # The cover files of all the books are written before any has_cover is updated
     ('set_cover_two_books', {'stray-cover'}, (
         'file:backend.set_cover@1/after',
         'file:backend.set_cover@2',
         'sql:update books set has_cover=? where id=?@1',
-    )),
-    # The in-memory tables are updated before the SQL statements are executed
-    ('set_field_custom_series', {'field:#series_index'}, (
-        'sql:update books_custom_column_4_link set extra=? where book=? and value=?@1',
-    )),
-    ('set_field_custom_series', {'field:#series'}, (
-        'sql:delete from books_custom_column_4_link where book=?;@1',
-        'sql:insert into books_custom_column_4_link(book,value,extra) values(?, ?, 1.0)@1',
-    )),
-    # The in-memory tables are updated before the SQL statements are executed
-    ('set_field_custom_tags', {'field:#tags'}, (
-        'sql:delete from books_custom_column_7_link where book=?@1',
-        'sql:insert into books_custom_column_7_link(book,value) values(?, ?)@1',
-    )),
-    # The in-memory tables are updated before the SQL statements are executed
-    ('set_field_identifiers', {'field:identifiers'}, (
-        'sql:delete from identifiers where book=?@1',
-        'sql:insert or replace into identifiers (book, type, val) values (?, ?, ?)@1',
-    )),
-    ('set_field_identifiers', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The in-memory tables are updated before the SQL statements are executed
-    ('set_field_rating', {'field:rating'}, (
-        'sql:delete from books_ratings_link where book=?;@1',
-        'sql:insert into books_ratings_link(book,rating) values(?, ?)@1',
-    )),
-    # The in-memory tables are updated before the SQL statements are executed
-    ('set_field_series', {'field:series'}, (
-        'sql:delete from books_series_link where book=?;@1',
-        'sql:insert into books_series_link(book,series) values(?, ?)@1',
-    )),
-    # The in-memory tables are updated before the SQL statements are executed. Removing a tag that is no longer used removes its note first
-    ('set_field_tags', {'field:tags'}, (
-        'sql:delete from books_tags_link where book=?@1',
-    )),
-    ('set_field_tags', {'composite-cache', 'field:tags'}, (
-        'sql:insert into books_tags_link(book,tag) values(?, ?)@1',
-    )),
-    ('set_field_tags', {'composite-cache'}, (
-        'sql:delete from notes_db.notes where id=?@1',
-        'file:notes.retire_entry@1',
-        'file:notes.retire_entry@1/after',
-        'file:notes.remove_with_retry@1',
-        'file:notes.remove_with_retry@2',
-        'sql:delete from tags where id=?@1',
         'sql:update books set last_modified=? where id=?@1',
     )),
     # The in-memory tables are updated before the SQL statement is executed
@@ -1044,12 +985,6 @@ KNOWN_INCONSISTENT = known_table(
     # The in-memory tables are updated before the SQL statement is executed
     ('set_sort_for_authors', {'items:authors'}, (
         'sql:update authors set sort=? where id=?@1',
-    )),
-    # Titles are written, then the folders of the books are moved one at a time, failures leave some books in new folders and others in old ones,
-    # and the sort field is written after the title
-    ('set_title_two_books', {'field:sort'}, (
-        'sql:update books set sort=? where id=?@1',
-        'sql:update books set sort=? where id=?@2',
     )),
     ('set_title_two_books', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',

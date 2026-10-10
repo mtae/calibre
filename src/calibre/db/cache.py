@@ -27,6 +27,7 @@ from calibre.customize.ui import run_plugins_on_import, run_plugins_on_postadd, 
 from calibre.db import SPOOL_SIZE, _get_next_series_num_for_list
 from calibre.db.annotations import merge_annotations
 from calibre.db.book_storage import BookStorageEntry
+from calibre.db.change import ChangeRecord
 from calibre.db.categories import CategoriesCache, CategoriesInvalidatingLock, get_categories, items_of_books
 from calibre.db.constants import COVER_FILE_NAME, DATA_DIR_NAME, NOTES_DIR_NAME, Pages
 from calibre.db.errors import BooksNotRemoved, NoSuchBook, NoSuchFormat
@@ -198,6 +199,8 @@ class Cache:
         self.format_metadata_cache = defaultdict(dict)
         self.formatter_template_cache = {}
         self.dirtied_cache = {}
+        self._active_change = None
+        self.change_listeners = []  # called with the ChangeRecord after each outermost _change() commits
         self.link_maps_cache = {}
         self.extra_files_cache = {}
         self.vls_for_books_cache = None
@@ -1968,6 +1971,54 @@ class Cache:
 
     _check_dirtied_annotations = check_dirtied_annotations
 
+    @contextmanager
+    def _change(self):
+        """
+        The unit of work of the write path, see calibre.db.change for the design. Must be used with the write lock held.
+        Yields the ChangeRecord to be filled in by the write code.
+        """
+        parent = self._active_change
+        record = self._active_change = ChangeRecord()
+        try:
+            with self.backend.notes.deferred_file_operations(), self.backend.conn:
+                yield record
+        except BaseException:
+            try:
+                self._rollback_change(record)
+            finally:
+                self._active_change = parent
+                if parent is not None:
+                    parent.merge(record)
+            raise
+        self._active_change = parent
+        if parent is not None:
+            parent.merge(record)
+        else:
+            self._apply_change(record)
+
+    def _rollback_change(self, record):
+        # The SQL was rolled back by the transaction, make the in memory state match it
+        books = record.book_ids or None
+        try:
+            for table in record.tables.values():
+                self.backend._read_table(table, table.read, self.backend)
+        finally:
+            for name in record.fields:
+                self.categories_cache.field_changed(name)
+            self.clear_link_map_cache(books)
+            if self.composites:
+                self._clear_composite_caches(books)
+            self._clear_search_caches(books)
+
+    def _apply_change(self, record):
+        for name, (books, items) in record.fields.items():
+            # Only the fields with items are refreshed incrementally, the others as a whole
+            self.categories_cache.field_changed(name, items, books if items is not None else None)
+        for func in record.callbacks:
+            func()
+        for listener in self.change_listeners:
+            listener(record)
+
     @quiet_write_api
     def set_field(self, name, book_id_to_val_map, allow_case_change=True, do_path_update=True):
         """
@@ -2008,31 +2059,38 @@ class Cache:
         # cached categories can be refreshed without recomputing every item.
         # Only fields with items can be categories, or be depended on by them.
         touched_items = items_of_books(f.table.book_col_map, book_id_to_val_map) if f.is_many else None
-        try:
+        with self._change() as change:
+            change.modifies(f.table, self.fields['last_modified'].table)
+            if name == 'title':
+                change.modifies(self.fields['sort'].table)
+            elif name == 'authors':
+                change.modifies(self.fields['author_sort'].table)
+            if is_series:
+                sf = self.fields[f.name + '_index']
+                change.modifies(sf.table)
+            # Until the writer reports the books it changed this is all that is known
+            change.touch(name, book_id_to_val_map.keys(), ())
             dirtied = f.writer.set_books(book_id_to_val_map, self.backend, allow_case_change=allow_case_change)
-        except Exception:
-            # The in memory tables may have been changed before the failure, so
-            # the cached categories must not be refreshed incrementally
-            self.categories_cache.field_changed(name)
-            raise
-        if f.is_many:
-            items_of_books(f.table.book_col_map, book_id_to_val_map, touched_items)
-            # A case change also affects the books of the renamed item, which
-            # are in dirtied
-            self.categories_cache.field_changed(name, touched_items, dirtied | book_id_to_val_map.keys())
-        else:
-            self.categories_cache.field_changed(name)
+            if f.is_many:
+                items_of_books(f.table.book_col_map, book_id_to_val_map, touched_items)
+                # A case change also affects the books of the renamed item, which
+                # are in dirtied
+                change.touch(name, dirtied | book_id_to_val_map.keys(), touched_items)
+            else:
+                change.touch(name, dirtied | book_id_to_val_map.keys())
 
-        if is_series and simap:
-            sf = self.fields[f.name + '_index']
-            dirtied |= sf.writer.set_books(simap, self.backend, allow_case_change=False)
+            if is_series and simap:
+                dirtied |= sf.writer.set_books(simap, self.backend, allow_case_change=False)
 
-        if dirtied:
-            if update_path and do_path_update:
-                self._update_path(dirtied, mark_as_dirtied=False)
-            self._mark_as_dirty(dirtied)
-            self._clear_link_map_cache(dirtied)
-            self.event_dispatcher(EventType.metadata_changed, name, dirtied)
+            if dirtied:
+                self._mark_as_dirty(dirtied)
+                if update_path and do_path_update:
+                    # Moves the folders of the books, which cannot be rolled back.
+                    # Residual: it runs after the field is committed, so a failure
+                    # leaves the new value in place with the old folder names.
+                    change.after_commit(partial(self._update_path, dirtied, mark_as_dirtied=False))
+                change.after_commit(partial(self._clear_link_map_cache, dirtied))
+                change.after_commit(partial(self.event_dispatcher, EventType.metadata_changed, name, dirtied))
         return dirtied
 
     _set_field = set_field

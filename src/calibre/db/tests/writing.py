@@ -1241,3 +1241,42 @@ class WritingTest(BaseTest):
         self.assertEqual({}, cache.get_all_link_maps_for_book(1), 'Not all links for book were deleted')
 
     # }}}
+
+    def test_change_unit_of_work(self):  # {{{
+        cache = self.init_cache()
+        seen = []
+        cache.change_listeners.append(seen.append)
+        old = cache.field_for('tags', 1)
+        cache.set_field('tags', {1: ('t_new',)})
+        self.assertEqual(1, len(seen), 'listener not called once per committed change')
+        self.assertIn(1, seen[0].fields['tags'][0], 'record lacks the changed book')
+        self.assertTrue(seen[0].fields['tags'][1], 'record lacks the changed items')
+        # A failure rolls back the sql and the memory, and the listeners are not called
+        seen.clear()
+        real = cache.backend.executemany
+
+        def fail(sql, *a, **kw):
+            if 'books_tags_link' in sql and 'INSERT' in sql.upper():
+                raise ValueError('injected')
+            return real(sql, *a, **kw)
+
+        cache.backend.executemany = fail
+        try:
+            with self.assertRaises(ValueError):
+                cache.set_field('tags', {1: ('t_other',)})
+        finally:
+            del cache.backend.executemany
+        self.assertEqual([], seen, 'listener called for a failed change')
+        self.assertEqual(('t_new',), cache.field_for('tags', 1), 'memory kept a change that was rolled back')
+        self.assertEqual(('t_new',), self.init_cache(cache.backend.library_path).field_for('tags', 1), 'database differs from memory')
+        # Nested changes merge into the outermost one, which notifies once
+        with cache.write_lock:
+            with cache._change() as outer:
+                with cache._change() as inner:
+                    inner.touch('tags', (1,))
+                self.assertEqual([], seen)
+        self.assertEqual(1, len(seen))
+        self.assertIn(1, seen[0].fields['tags'][0])
+        del old
+
+    # }}}

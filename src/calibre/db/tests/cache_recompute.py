@@ -550,12 +550,6 @@ class Harness:
         field = rng.choice(SET_FIELDS)
         books = self.pick_books(rng, ids)
         val_map = {b: value_for(rng, field) for b in books}
-        if field == '#series':
-            # Not a different series with the same index as the current one, which leaves the
-            # index in the database wrong, see test_stale_custom_series_index
-            for b, val in val_map.items():
-                if val is not None and cache.field_for('#series_index', b) == float(val.rpartition('[')[2].rstrip(']')):
-                    val_map[b] = val.rpartition('[')[0] + '[5]'
         return 'set_field', field, val_map
 
     def gen_set_metadata(self, rng, cache, ids):
@@ -975,17 +969,23 @@ class CacheRecomputeTest(BaseTest):
         # saved_search_delete() and saved_search_rename(), does not call clear_search_caches()
         self.assert_same_as_fresh(cache, 'search', 'search:"=Mine"')
 
-    @unittest.expectedFailure
     def test_stale_custom_series_index(self):
-        "Setting a custom series to a different series with the same index as before leaves the index in the database wrong"
+        "Setting a custom series to a different series with the same index as before keeps that index in the database"
         cache = self.init_cache()
         self.assertEqual(('My Series Two', 3.0), (cache.field_for('#series', 1), cache.field_for('#series_index', 1)))
         cache.set_field('#series', {1: 'Other [3]'})
         self.assertEqual(('Other', 3.0), (cache.field_for('#series', 1), cache.field_for('#series_index', 1)))
         fresh = self.fresh(cache)
         self.assertEqual('Other', fresh.field_for('#series', 1))
-        # Suspected cause: custom_series_index() (write.py ~257) skips the update because the in
-        # memory index equals the new index, but changing the series has reset the row in the database to 1.0
+        # Was: custom_series_index() skipped the update because the in memory index equals the new
+        # index, but changing the series resets the row in the database to 1.0
         self.assertEqual(3.0, fresh.field_for('#series_index', 1))
+        # Without an index in the new value the index the book has is kept, in the database as well
+        cache.set_field('#series', {1: 'Another'})
+        self.assertEqual(('Another', 3.0), (cache.field_for('#series', 1), cache.field_for('#series_index', 1)))
+        self.assertEqual(('Another', 3.0), (lambda f: (f.field_for('#series', 1), f.field_for('#series_index', 1)))(self.fresh(cache)))
+        # And an index different from the previous one
+        cache.set_field('#series', {1: 'Yet Another [7]'})
+        self.assertEqual(('Yet Another', 7.0), (lambda f: (f.field_for('#series', 1), f.field_for('#series_index', 1)))(self.fresh(cache)))
 
     # }}}

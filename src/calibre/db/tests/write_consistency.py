@@ -977,12 +977,9 @@ KNOWN_INCONSISTENT = known_table(
         'file:backend.set_cover@2',
         'sql:update books set has_cover=? where id=?@1',
     )),
-    # The in-memory tables are updated before the SQL statements are executed. The normal case is a bug: the series index is kept in memory when
-    # the series changes, but the database resets it to 1.0 (see custom_series_index() in write.py)
+    # The in-memory tables are updated before the SQL statements are executed
     ('set_field_custom_series', {'field:#series_index'}, (
-        'normal',
-        'sql:delete from custom_column_4 where id=?@1',
-        'sql:update books set last_modified=? where id=?@1',
+        'sql:update books_custom_column_4_link set extra=? where book=? and value=?@1',
     )),
     ('set_field_custom_series', {'field:#series'}, (
         'sql:delete from books_custom_column_4_link where book=?;@1',

@@ -34,7 +34,12 @@ example a new format is copied to a temporary file) and finished from ``after_co
 with ``on_rollback()`` removing what was staged. The first callback that fails does not
 prevent the others from running, its exception is raised after all of them ran.
 
-Migrated so far: set_field, add_format, remove_formats, set_cover, restore_original_format and move_format_from_trash. set_cover
+Migrated so far: set_field, add_format, remove_formats, set_cover, restore_original_format, move_format_from_trash, rename_items,
+remove_items, set_link_map, set_link_for_authors, set_sort_for_authors, set_notes_for, unretire_note_for and import_note. The item methods
+register the table of the field and the books that have the items before they change anything, so a failure clears the caches of all
+of them; the move of the folders of the books that a rename of authors causes, the link cache clearing and the events run from
+after_commit(). The notes methods queue their file removals (see Notes.deferred_file_operations()) and write the backup file of
+a note inside the change, so that a failure rolls the note back. set_cover
 stages each cover in a temporary file of the book folder (removing a cover is deferred) and replaces it from after_commit(), the cover
 caches are invalidated after that. restore_original_format moves the original file over the format from after_commit() (as
 add_format does with a staged file), move_format_from_trash moves the file out of the trash from after_commit(). add_format stages the new contents in a

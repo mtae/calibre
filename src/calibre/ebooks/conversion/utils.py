@@ -23,10 +23,21 @@ class HeuristicProcessor:
         self.blanks_deleted = False
         self.blanks_between_paragraphs = False
         self.linereg = re.compile(r'(?<=<p).*?(?=</p>)', re.IGNORECASE | re.DOTALL)
-        self.blankreg = re.compile(r'\s*(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*(?P<closeline></p>)', re.IGNORECASE)
-        self.anyblank = re.compile(r'\s*(?P<openline><p[^>]*>)\s*(?P<closeline></p>)', re.IGNORECASE)
-        self.multi_blank = re.compile(r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}(?!\s*<h\d)', re.IGNORECASE)
-        self.any_multi_blank = re.compile(r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}', re.IGNORECASE)
+        # Whitespace before the first tag of these patterns is only matched from
+        # the start of a run of whitespace, (?<!\s)\s*+, and all whitespace is
+        # matched possessively. The tags that follow it start with <, so
+        # giving back whitespace never helps a match, and a match that starts
+        # inside a run of whitespace is the same as the one that starts at its
+        # start. Without this the engine retries every start position in a run
+        # of whitespace (quadratic) and, in the multi_blank patterns, every
+        # way of dividing the whitespace between the \s* that end one
+        # repetition and start the next (exponential). Matches and groups are
+        # unchanged, see the test in regex_safety_test.py.
+        self.blankreg = re.compile(r'(?<!\s)\s*+(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
+        self.anyblank = re.compile(r'(?<!\s)\s*+(?P<openline><p[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
+        self.multi_blank = re.compile(
+            r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}(?!\s*<h\d)', re.IGNORECASE)
+        self.any_multi_blank = re.compile(r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}', re.IGNORECASE)
         self.line_open = (
             r'<(?P<outer>p|div)[^>]*>(\s*<(?P<inner1>font|span|[ibu])[^>]*>)?'
             r'(\s*<(?P<inner2>font|span|[ibu])[^>]*>)?(\s*<(?P<inner3>font|span|[ibu])[^>]*>)?\s*'
@@ -551,8 +562,11 @@ class HeuristicProcessor:
         return html
 
     def arrange_htm_line_endings(self, html):
-        html = re.sub(r'\s*</(?P<tag>p|div)>', r'</\g<tag>' + '>\n', html)
-        html = re.sub(r'\s*<(?P<tag>p|div)(?P<style>[^>]*)>\s*', r'\n<\g<tag>\g<style>' + '>', html)
+        # See the comment on blankreg for (?<!\s)\s*+. The second pattern also
+        # matches the whitespace after the tag, so the next match starts at the
+        # end of a run of whitespace, which is what the (?<=\s)(?!\s) is for.
+        html = re.sub(r'(?<!\s)\s*+</(?P<tag>p|div)>', r'</\g<tag>' + '>\n', html)
+        html = re.sub(r'(?:(?<!\s)\s*+|(?<=\s)(?!\s))<(?P<tag>p|div)(?P<style>[^>]*)>\s*+', r'\n<\g<tag>\g<style>' + '>', html)
         return html
 
     def fix_nbsp_indents(self, html):

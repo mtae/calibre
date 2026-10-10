@@ -21,6 +21,8 @@ HEAVY_MODULES = (
     'bs4',  # Only needed by library.comments for rarely used HTML comment conversion, via jacket
     'html5lib',
     'soupsieve',
+    'mechanize',  # Only needed for web metadata look ups, by the amazon source
+    'calibre.ebooks.unihandecode',  # Large tables; only needed for non-ASCII CSS class names, filenames, etc.
 )
 
 

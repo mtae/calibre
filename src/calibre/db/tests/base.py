@@ -21,6 +21,8 @@ IMG = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xe1\x
 class BaseTest(unittest.TestCase):
     longMessage = True
     maxDiff = None
+    # Test classes that have very many tests can turn this off, a full collection is slow
+    collect_garbage_after_test = True
 
     def setUp(self):
         from calibre.utils.recycle_bin import nuke_recycle
@@ -38,7 +40,8 @@ class BaseTest(unittest.TestCase):
         for x in self.objects_to_close:
             x.close()
         self.objects_to_close = []
-        gc.collect(), gc.collect()
+        if self.collect_garbage_after_test:
+            gc.collect(), gc.collect()
         for x in self.paths_to_remove:
             try:
                 shutil.rmtree(x)
@@ -80,6 +83,167 @@ class BaseTest(unittest.TestCase):
         self.objects_to_close.append(cache)
         return cache
 
+    def find_library_inconsistencies(self, cache):
+        """
+        Check that the library on disk is consistent with the in-memory state
+        of the specified Cache and return a list of the problems found, as
+        (kind, message) tuples. An empty list means that the library is
+        consistent. It never raises an exception for an inconsistency, use
+        :meth:`assert_library_consistent` for tests that expect none. The kinds
+        are:
+
+        * ``open``: A fresh Cache cannot be opened on the library
+        * ``ids``: The set of book ids differs between the live cache and the database
+        * ``field:<name>``: The value of the field for some book differs
+        * ``composite-cache``: The same for composite columns, whose values are cached
+        * ``items:<field>``: The items (tags, authors, ...) of a many-one/many-many field differ,
+          or their links, or author sorts, ``formats``: the formats of a book differ
+        * ``folder-missing``, ``format-file-missing``, ``cover-file-missing``: A book that
+          has formats or a cover has no folder, or a listed file does not exist
+        * ``format-size``: The size recorded for a format is not the size of the file
+        * ``stray-cover``: A book without a cover has a cover file
+        * ``orphan-folder``: A book folder or author folder that does not belong to any book
+        * ``prefs``: A preference differs between the live cache and the database
+        * ``note-orphan``, ``note-resource-missing``, ``note-backup-missing``: A note of an item that does not exist,
+          a resource used by a note or the backup file of a note that does not exist on the disk
+        * ``notes-differ``: The items that have notes differ between the live cache and the database
+        """
+        import re
+
+        from calibre.db.backend import DB
+        from calibre.db.cache import Cache
+        from calibre.db.constants import COVER_FILE_NAME, NOTES_DIR_NAME, TRASH_DIR_NAME
+
+        problems = []
+
+        def add(kind, msg):
+            problems.append((kind, msg))
+
+        def normalize(x, field=None):
+            # The in-memory timestamps of newly created books have a
+            # microsecond part that is not stored in the database
+            if isinstance(x, datetime):
+                return x.replace(microsecond=0)
+            # The order of formats depends on the order of the rows in the database
+            if field == 'formats' and x:
+                return tuple(sorted(x))
+            # A book without formats has a size of 0 in memory and NULL in the database
+            if field == 'size':
+                return x or 0
+            return x
+
+        library_path = cache.backend.library_path
+        # Hold the write lock so that the background threads of the live
+        # cache, such as the one that counts pages, do not use the database
+        # while the new connection is being set up
+        try:
+            with cache.quiet_write_lock:
+                fresh = Cache(DB(library_path))
+                fresh.init()
+        except Exception as err:
+            add('open', f'A fresh Cache cannot be opened on the library: {err!r}')
+            return problems
+        try:
+            ids = set(cache.all_book_ids())
+            if ids != set(fresh.all_book_ids()):
+                add(
+                    'ids',
+                    f'The in-memory book ids differ from those in the database: only in memory {sorted(ids - set(fresh.all_book_ids()))},'
+                    f' only in the database {sorted(set(fresh.all_book_ids()) - ids)}',
+                )
+            ids &= set(fresh.all_book_ids())
+            for field in sorted(cache.fields):
+                # ondevice is computed from the device, pages is -1 in memory
+                # for a book that is queued for a pages scan, 0 in the database
+                if field in ('ondevice', 'pages'):
+                    continue
+                for book_id in sorted(ids):
+                    if normalize(cache.field_for(field, book_id), field) != normalize(fresh.field_for(field, book_id), field):
+                        # The values of composite columns are cached, so they are stale
+                        # when a change is not followed by clearing the cache
+                        kind = 'composite-cache' if cache.fields[field].is_composite else f'field:{field}'
+                        add(kind, f'The field {field} of book {book_id} differs between the in-memory state and the database')
+                        break
+                # Items of many-one and many-many fields
+                table = getattr(cache.fields[field], 'table', None)
+                ftable = getattr(fresh.fields[field], 'table', None) if field in fresh.fields else None
+                for attr in ('id_map', 'link_map', 'asort_map'):
+                    if hasattr(table, attr):
+                        # Items without a link are not always in link_map
+                        mine, theirs = getattr(table, attr), getattr(ftable, attr, None)
+                        if attr == 'link_map':
+                            mine, theirs = ({k: v for k, v in x.items() if v} for x in (mine, theirs or {}))
+                        if mine != theirs:
+                            add(f'items:{field}', f'The {attr} of {field} differs between the in-memory state and the database')
+            for book_id in sorted(ids):
+                formats = cache.formats(book_id, verify_formats=False)
+                if sorted(formats) != sorted(fresh.formats(book_id, verify_formats=False)):
+                    add('formats', f'Formats of book {book_id} differ')
+                has_cover = bool(cache.field_for('cover', book_id))
+                path = cache.field_for('path', book_id)
+                bdir = os.path.join(library_path, *path.split('/')) if path else ''
+                if (formats or has_cover) and not (bdir and os.path.isdir(bdir)):
+                    add('folder-missing', f'The folder of book {book_id} is missing: {bdir!r}')
+                    continue
+                for fmt in formats:
+                    fpath = cache.format_abspath(book_id, fmt)
+                    if not (fpath and os.path.exists(fpath)):
+                        add('format-file-missing', f'The {fmt} file of book {book_id} is missing from the disk')
+                        continue
+                    if not os.path.exists(fresh.format_abspath(book_id, fmt) or ''):
+                        add('format-file-missing', f'The {fmt} file of book {book_id}, as found by a fresh cache, is missing from the disk')
+                    elif cache.fields['formats'].table.size_map[book_id].get(fmt) != os.path.getsize(fpath):
+                        add('format-size', f'The recorded size of the {fmt} file of book {book_id} is not the size of the file')
+                cover = os.path.join(bdir, COVER_FILE_NAME) if bdir else ''
+                if has_cover and not os.path.exists(cover):
+                    add('cover-file-missing', f'The cover of book {book_id} is missing from the disk')
+                elif not has_cover and cover and os.path.exists(cover):
+                    add('stray-cover', f'Book {book_id} is marked as having no cover but has a cover file')
+            # Orphaned folders
+            expected = {os.path.join(*cache.field_for('path', x).split('/')) for x in ids if cache.field_for('path', x)}
+            pat = re.compile(r'\((\d+)\)$')
+            found = set()
+            for author in os.listdir(library_path):
+                apath = os.path.join(library_path, author)
+                if author in (TRASH_DIR_NAME, NOTES_DIR_NAME) or not os.path.isdir(apath):
+                    continue
+                children = os.listdir(apath)
+                if not children:
+                    add('orphan-folder', f'Orphaned empty author folder: {author!r}')
+                for title in children:
+                    rel = os.path.join(author, title)
+                    if pat.search(title) is None or not os.path.isdir(os.path.join(library_path, rel)):
+                        add('orphan-folder', f'Unexpected item in the library: {rel!r}')
+                    found.add(rel)
+            orphans = found - expected
+            if orphans:
+                add('orphan-folder', f'Orphaned book folders (no matching book in the database): {sorted(orphans)}')
+            # Preferences, they include the saved searches and virtual libraries
+            if dict(cache.backend.prefs) != dict(fresh.backend.prefs):
+                changed = sorted(k for k in set(cache.backend.prefs) | set(fresh.backend.prefs) if cache.backend.prefs.get(k) != fresh.backend.prefs.get(k))
+                add('prefs', f'The preferences {changed} differ between the in-memory state and the database')
+            # Notes
+            try:
+                notes = cache.get_all_items_that_have_notes()
+                if notes != fresh.get_all_items_that_have_notes():
+                    add('notes-differ', 'The items that have notes differ between the in-memory state and the database')
+                for field, item_ids in notes.items():
+                    for item_id in item_ids:
+                        if item_id not in cache.fields[field].table.id_map:
+                            add('note-orphan', f'The note for {field} item {item_id} belongs to an item that does not exist')
+                            continue
+                        data = cache.notes_data_for(field, item_id) or {}
+                        for rhash in data.get('resource_hashes', ()):
+                            if not os.path.exists(cache.backend.notes.path_for_resource(rhash)):
+                                add('note-resource-missing', f'The resource {rhash} of the note for {field} item {item_id} is missing from the disk')
+                        if not os.path.exists(os.path.join(cache.backend.notes.backup_dir, field, str(item_id))):
+                            add('note-backup-missing', f'The backup file of the note for {field} item {item_id} is missing')
+            except Exception as err:
+                add('notes-differ', f'Could not check the notes: {err!r}')
+        finally:
+            fresh.close()
+        return problems
+
     def assert_library_consistent(self, cache):
         """
         Check that the library on disk is consistent with the in-memory state
@@ -90,79 +254,19 @@ class BaseTest(unittest.TestCase):
         * A fresh Cache opened on the library from disk has exactly the same
           books, and the same value for every field of every book, same
           formats and same cover flag, as the live cache. Which means that
-          the database and the in-memory state agree.
+          the database and the in-memory state agree. The items of the many
+          one and many-many fields (tags, authors, ...) are also compared.
         * The folder, the listed format files and the cover of every book
-          exist on disk.
+          exist on disk, and the sizes recorded for the formats are those of
+          the files.
         * There are no orphaned book folders, folders that do not belong to
           any book in the database.
+        * Notes refer to items and resources that exist.
+
+        See :meth:`find_library_inconsistencies` for a non raising version.
         """
-        import re
-
-        from calibre.db.backend import DB
-        from calibre.db.cache import Cache
-        from calibre.db.constants import COVER_FILE_NAME, NOTES_DIR_NAME, TRASH_DIR_NAME
-
-        def normalize(x):
-            # The in-memory timestamps of newly created books have a
-            # microsecond part that is not stored in the database
-            return x.replace(microsecond=0) if isinstance(x, datetime) else x
-
-        library_path = cache.backend.library_path
-        # Hold the write lock so that the background threads of the live
-        # cache, such as the one that counts pages, do not use the database
-        # while the new connection is being set up
-        with cache.quiet_write_lock:
-            fresh = Cache(DB(library_path))
-            fresh.init()
-        try:
-            ids = set(cache.all_book_ids())
-            self.assertEqual(ids, set(fresh.all_book_ids()), 'The in-memory book ids differ from those in the database')
-            for field in sorted(cache.fields):
-                # ondevice is computed from the device, pages is -1 in memory
-                # for a book that is queued for a pages scan, 0 in the database
-                if field in ('ondevice', 'pages'):
-                    continue
-                for book_id in sorted(ids):
-                    self.assertEqual(
-                        normalize(cache.field_for(field, book_id)),
-                        normalize(fresh.field_for(field, book_id)),
-                        f'The field {field} of book {book_id} differs between the in-memory state and the database',
-                    )
-            for book_id in sorted(ids):
-                formats = cache.formats(book_id, verify_formats=False)
-                self.assertEqual(formats, fresh.formats(book_id, verify_formats=False), f'Formats of book {book_id} differ')
-                has_cover = bool(cache.field_for('cover', book_id))
-                path = cache.field_for('path', book_id)
-                bdir = os.path.join(library_path, *path.split('/')) if path else ''
-                if formats or has_cover:
-                    self.assertTrue(bdir and os.path.isdir(bdir), f'The folder of book {book_id} is missing: {bdir!r}')
-                for fmt in formats:
-                    fpath = cache.format_abspath(book_id, fmt)
-                    self.assertTrue(fpath and os.path.exists(fpath), f'The {fmt} file of book {book_id} is missing from the disk')
-                    self.assertTrue(
-                        os.path.exists(fresh.format_abspath(book_id, fmt) or ''), f'The {fmt} file of book {book_id} is missing from the disk'
-                    )
-                if has_cover:
-                    self.assertTrue(os.path.exists(os.path.join(bdir, COVER_FILE_NAME)), f'The cover of book {book_id} is missing from the disk')
-            # Orphaned folders
-            expected = {os.path.join(*cache.field_for('path', x).split('/')) for x in ids if cache.field_for('path', x)}
-            pat = re.compile(r'\((\d+)\)$')
-            found = set()
-            for author in os.listdir(library_path):
-                apath = os.path.join(library_path, author)
-                if author in (TRASH_DIR_NAME, NOTES_DIR_NAME) or not os.path.isdir(apath):
-                    continue
-                children = os.listdir(apath)
-                self.assertTrue(children, f'Orphaned empty author folder: {author!r}')
-                for title in children:
-                    rel = os.path.join(author, title)
-                    m = pat.search(title)
-                    self.assertTrue(m is not None and os.path.isdir(os.path.join(library_path, rel)), f'Unexpected item in the library: {rel!r}')
-                    found.add(rel)
-            orphans = found - expected
-            self.assertFalse(orphans, f'Orphaned book folders (no matching book in the database): {sorted(orphans)}')
-        finally:
-            fresh.close()
+        problems = self.find_library_inconsistencies(cache)
+        self.assertFalse(problems, 'The library is not consistent:\n' + '\n'.join(f'  {kind}: {msg}' for kind, msg in problems[:20]))
 
     def collect_book_files(self, cache):
         """

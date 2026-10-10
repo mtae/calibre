@@ -22,6 +22,13 @@ HEAVY_MODULES = (
     'html5lib',
     'soupsieve',
     'mechanize',  # Only needed for web metadata look ups, by the amazon source
+    # Device drivers, AI providers and archive import plugins are loaded by
+    # calibre.customize.ui._ensure_late() only when something asks for them
+    'calibre.devices.kindle.driver',
+    'calibre.devices.kobo.driver',
+    'calibre.devices.smart_device_app.driver',
+    'calibre.ai.openai',
+    'calibre.ebooks.metadata.archive',
     'calibre.ebooks.unihandecode',  # Large tables; only needed for non-ASCII CSS class names, filenames, etc.
 )
 

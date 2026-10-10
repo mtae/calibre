@@ -28,7 +28,7 @@ from calibre.customize import (
 )
 from calibre.customize import InterfaceActionBase as InterfaceAction
 from calibre.customize import StoreBase as Store
-from calibre.customize.builtins import plugins as builtin_plugins
+from calibre.customize.builtins import LATE_NAMES, late_group, plugin_slots
 from calibre.customize.conversion import InputFormatPlugin, OutputFormatPlugin
 from calibre.customize.profiles import InputProfile, OutputProfile
 from calibre.customize.zipplugin import loader
@@ -38,7 +38,7 @@ from calibre.ebooks.metadata.sources.base import Source
 from calibre.utils.config import Config, ConfigProxy, OptionParser, make_config_dir, plugin_dir
 from calibre.utils.localization import _
 
-builtin_names = frozenset(p.name for p in builtin_plugins)
+builtin_names = frozenset(p.name for p in plugin_slots if not isinstance(p, str)) | LATE_NAMES
 BLACKLISTED_PLUGINS = frozenset({
     'Marvin XD',
     'iOS reader applications',
@@ -77,6 +77,8 @@ def find_plugin(name):
     for plugin in _initialized_plugins:
         if plugin.name == name:
             return plugin
+    if _ensure_late():
+        return find_plugin(name)
 
 
 def load_plugin(path_to_zip_file):  # {{{
@@ -220,6 +222,9 @@ def reread_filetype_plugins():
 
 
 def plugins_for_ft(ft, occasion):
+    if occasion == 'import':
+        # The only late file type plugins (archive extraction) are import plugins
+        _ensure_late()
     op = {
         'import': _on_import,
         'preprocess': _on_preprocess,
@@ -410,6 +415,7 @@ def has_library_closed_plugins():
 
 # AI Provider Plugins {{{
 def available_ai_provider_plugins() -> Iterator[AIProviderPlugin]:
+    _ensure_late()
     customization = config['plugin_customization']
     for plugin in _initialized_plugins:
         if isinstance(plugin, AIProviderPlugin):
@@ -734,6 +740,7 @@ def plugin_for_catalog_format(fmt):
 
 
 def device_plugins(include_disabled=False):
+    _ensure_late()
     for plugin in _initialized_plugins:
         if isinstance(plugin, DevicePlugin):
             if include_disabled or not is_disabled(plugin):
@@ -752,6 +759,7 @@ def usbms_plugins(include_disabled=True):
 
 
 def disabled_device_plugins():
+    _ensure_late()
     for plugin in _initialized_plugins:
         if isinstance(plugin, DevicePlugin):
             if is_disabled(plugin):
@@ -778,6 +786,7 @@ def all_metadata_plugins():
 
 
 def patch_metadata_plugins(possibly_updated_plugins):
+    _ensure_late()  # so that the indices below stay valid
     patches = {}
     for i, plugin in enumerate(_initialized_plugins):
         if isinstance(plugin, Source) and plugin.name in builtin_names:
@@ -820,6 +829,9 @@ def content_server_plugins():
 # Initialize plugins {{{
 
 _initialized_plugins = []
+# The registration order of all builtin and other plugins, with the names of the
+# late groups that have not been loaded yet. See _ensure_late()
+_init_order = []
 
 
 def initialize_plugin(plugin, path_to_zip_file=None, installation_type=PluginInstallationType.BUILTIN):
@@ -858,8 +870,9 @@ def get_system_plugins():
 
 
 def initialize_plugins(perf=False):
-    global _initialized_plugins
+    global _initialized_plugins, _init_order
     _initialized_plugins = []
+    _init_order = []
     system_plugins = get_system_plugins().copy()
     conflicts = {name for name in config['plugins'] if name in builtin_names or name in system_plugins}
     for p in conflicts:
@@ -882,56 +895,114 @@ def initialize_plugins(perf=False):
         system_plugins.pop(name, None)
     ostdout, ostderr = sys.stdout, sys.stderr
     if perf:
-        import time
         from collections import defaultdict
 
         times: defaultdict[str, int | float] = defaultdict(int)
 
+    order = []
     for zfp, installation_type in chain(
         zip_value(external_plugins.items(), PluginInstallationType.EXTERNAL),
         zip_value(system_plugins.items(), PluginInstallationType.SYSTEM),
-        zip_value(builtin_plugins, PluginInstallationType.BUILTIN),
+        zip_value(plugin_slots, PluginInstallationType.BUILTIN),
     ):
-        try:
-            if not isinstance(zfp, type):
-                # We have a plugin name
-                pname, path = zfp
-                zfp = os.path.join(plugin_dir, pname + '.zip')
-                if not os.path.exists(zfp):
-                    zfp = path
-            try:
-                plugin = load_plugin(zfp) if not isinstance(zfp, type) else zfp
-            except PluginNotFound:
-                continue
-            if perf:
-                st = time.time()
-            plugin = initialize_plugin(
-                plugin,
-                None if isinstance(zfp, type) else zfp,
-                installation_type,
-            )
-            if perf:
-                times[plugin.name] = time.time() - st
+        if isinstance(zfp, str):
+            # A group of builtin plugins that is only imported when needed
+            order.append(zfp)
+            continue
+        plugin = _initialize_entry(zfp, installation_type, times if perf else None)
+        if plugin is not None:
+            order.append(plugin)
             _initialized_plugins.append(plugin)
-        except Exception:
-            print('Failed to initialize plugin:', repr(zfp), file=sys.stderr)
-            if DEBUG or True:
-                traceback.print_exc()
     # Prevent a custom plugin from overriding stdout/stderr as this breaks
     # ipython
     sys.stdout, sys.stderr = ostdout, ostderr
-    if perf:
-        for x in sorted(times, key=lambda x: times[x]):
-            print(f'{x:50}: {times[x]:.3f}')
+    _init_order = order
     _initialized_plugins.sort(key=lambda x: x.priority, reverse=True)
     reread_filetype_plugins()
     reread_metadata_plugins()
+    if perf:
+        _ensure_late(times)
+        for x in sorted(times, key=lambda x: times[x]):
+            print(f'{x:50}: {times[x]:.3f}')
+
+
+def _initialize_entry(zfp, installation_type, times=None):
+    try:
+        if not isinstance(zfp, type):
+            # We have a plugin name
+            pname, path = zfp
+            zfp = os.path.join(plugin_dir, pname + '.zip')
+            if not os.path.exists(zfp):
+                zfp = path
+        try:
+            plugin = load_plugin(zfp) if not isinstance(zfp, type) else zfp
+        except PluginNotFound:
+            return None
+        if times is not None:
+            import time
+
+            st = time.time()
+        plugin = initialize_plugin(
+            plugin,
+            None if isinstance(zfp, type) else zfp,
+            installation_type,
+        )
+        if times is not None:
+            times[plugin.name] = time.time() - st
+        return plugin
+    except Exception:
+        print('Failed to initialize plugin:', repr(zfp), file=sys.stderr)
+        if DEBUG or True:
+            traceback.print_exc()
+    return None
+
+
+def _ensure_late(times=None):
+    """
+    Import and initialize the builtin plugins in the late groups (device
+    drivers, AI providers, archive import plugins; see
+    calibre.customize.builtins_late). Most processes (for example conversion
+    workers) never need them, so initialize_plugins() leaves them out. Every
+    function in this file that can return one of them calls this first. The
+    resulting list of plugins is identical to what eager initialization gives:
+    same members, same order. Returns True if any plugins were added.
+    """
+    global _init_order
+    order, _init_order = _init_order, []
+    if not any(isinstance(x, str) for x in order):
+        return False
+    ostdout, ostderr = sys.stdout, sys.stderr
+    full = []
+    for item in order:
+        if isinstance(item, str):
+            for cls in late_group(item):
+                p = _initialize_entry(cls, PluginInstallationType.BUILTIN, times)
+                if p is not None:
+                    full.append(p)
+        else:
+            full.append(item)
+    sys.stdout, sys.stderr = ostdout, ostderr
+    # Plugins in _initialized_plugins but not in `order` (added by code that
+    # manipulates the list directly) go after the known ones.
+    rank = {id(p): i for i, p in enumerate(full)}
+    n = len(rank)
+    current = list(_initialized_plugins)
+    for i, p in enumerate(current):
+        rank.setdefault(id(p), n + i)
+    known = {id(p) for p in full}
+    full += [p for p in current if id(p) not in known]
+    full.sort(key=lambda x: (-x.priority, rank[id(x)]))
+    _initialized_plugins[:] = full
+    reread_filetype_plugins()
+    reread_metadata_plugins()
+    return True
 
 
 initialize_plugins()
 
 
 def initialized_plugins():
+    _ensure_late()
     yield from _initialized_plugins
 
 

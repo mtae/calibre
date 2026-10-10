@@ -768,6 +768,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.conversion.golden_test import find_tests
 
         a(find_tests())
+        from calibre.ebooks.conversion.startup_test import find_tests
+
+        a(find_tests())
         from calibre.ebooks.conversion.plugins.archive_input import find_tests
 
         a(find_tests())

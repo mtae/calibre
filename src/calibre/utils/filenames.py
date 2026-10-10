@@ -17,6 +17,9 @@ from calibre.utils.localization import _, get_udc
 
 
 def ascii_text(orig):
+    if isinstance(orig, str) and orig.isascii():
+        # Nothing to transliterate. Avoids loading the large transliteration tables
+        return orig
     udc = get_udc()
     try:
         ascii = udc.decode(orig)

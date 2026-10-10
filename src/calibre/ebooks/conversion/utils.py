@@ -568,7 +568,13 @@ class HeuristicProcessor:
         pre = re.compile(r'<pre>', re.IGNORECASE)
         if len(pre.findall(html)) >= 1:
             self.log.debug('Running Text Processing')
-            outerhtml = re.compile(r'.*?(?<=<pre>)(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
+            # Each match starts where the previous one ended (after a </pre>) or at the
+            # start of the document, so the lazy prefix of the old pattern is not needed.
+            # The atomic group keeps the first <pre> after that point: if no </pre> follows
+            # it, none follows a later <pre> either, so the backtracking this removes never
+            # found a match. The anchor stops every position inside an unclosed <pre> from
+            # scanning to the end of the document.
+            outerhtml = re.compile(r'(?:\A|(?<=</pre>))(?>.*?(?<=<pre>))(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
             html = outerhtml.sub(self.txt_process, html)
             from calibre.ebooks.conversion.preprocess import convert_entities
 

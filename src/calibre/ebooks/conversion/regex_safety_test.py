@@ -895,6 +895,7 @@ PASSING_CASES = (
     ('HeuristicProcessor(renumber headings)', 'many_paragraphs', 1000),
     ('HeuristicProcessor(dehyphenate)', 'many_paragraphs', 1000),
     ('HeuristicProcessor.markup_pre', 'spaces', 3000),
+    ('HeuristicProcessor.markup_pre', 'unclosed_pre', 400),
     ('HeuristicProcessor.cleanup_markup', 'newlines', 3000),
     ('HTMLPreProcessor', 'padded_line', 800),
     ('HTMLPreProcessor', 'spaces', 3000),
@@ -930,8 +931,6 @@ SLOW_CASES = {
         'cubic, 0.3 s for n=400, 1.5 s for n=800: utils.py:580, \\s*<i>\\s*(<i>\\s*</i>\\s*){0,2}\\s*</i> in the empty inline tag removal',
     ('HeuristicProcessor(all heuristics)', 'padded_closing_tags', 1000):
         'cubic, 2.0 s for n=800: utils.py:580 (see above), reached from HeuristicProcessor.__call__',
-    ('HeuristicProcessor.markup_pre', 'unclosed_pre', 400):
-        'cubic, 0.6 s for n=200, 5.1 s for n=400: utils.py:540 .*?(?<=<pre>)(?P<text>.*?)</pre> with DOTALL, quartic when the <pre> tags are not closed',
     # Quadratic
     ('HeuristicProcessor.detect_soft_breaks', 'unclosed_tags', 800):
         'quadratic, 1.6 s for n=400: utils.py:712, [^>]*> and \\s*<tag> groups restart at every unclosed tag. Cubic over whitespace was fixed in 7e05c67e, this is another shape',
@@ -1039,7 +1038,6 @@ KNOWN_OFFENDERS = {
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.cleanup_markup', 'stacked'): (2, 'line 579, 580: empty inline tag removal around \\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.detect_whitespace', 'stacked'): (4, 'line 646, 651, 656, 678: blanks_n_nopunct/blanks_between_paragraphs: (blank paragraphs\\s*){1,}\\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.fix_nbsp_indents', 'stacked'): (1, 'line 559: (<span>\\s*)+ \\s* before the nbsp run'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_pre', 'stacked'): (1, 'line 540: .*?(?<=<pre>)(?P<text>.*?)</pre>: cubic in the number of unclosed <pre> tags, see SLOW_CASES'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_user_break', 'stacked'): (1, 'line 768: .*?width(:|=)(?P<wnum>\\d+).*, applied to the scene break string the user typed, not to the book'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.punctuation_unwrap', 'stacked'): (3, 'line 513-515: line joining: \\s* (style_close)? (\\s*</p>)? \\s*'),
     ('ebooks/txt/processor.py', 'detect_paragraph_type', 'stacked'): (2, 'line 280, 288: ^\\s*.+$ and ^(\\t|\\s{2,}).+$ with (?m): \\s* and .+ share spaces'),

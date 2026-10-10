@@ -7,6 +7,7 @@ __copyright__ = '2015, Kovid Goyal <kovid at kovidgoyal.net>'
 
 import itertools
 import re
+from bisect import bisect_right
 from collections import OrderedDict, defaultdict
 from functools import wraps
 from itertools import chain
@@ -153,6 +154,7 @@ class Select:
         self.default_lang = default_lang
         if trace:
             self.dispatch_map = {k:trace_wrapper(v) for k, v in iteritems(self.dispatch_map)}
+        self._update_use_index()
         if ignore_inappropriate_pseudo_classes:
             self.ignore_inappropriate_pseudo_classes = INAPPROPRIATE_PSEUDO_CLASSES
         else:
@@ -167,11 +169,25 @@ class Select:
         self._attrib_map = None
         self._attrib_space_map = None
         self._lang_map = None
+        self._doc_order = None
+        self._sibling_tables = None
         self.map_tag_name = ascii_lower
         if '{' in self.root.tag:
             def map_tag_name(x):
                 return ascii_lower(x.rpartition('}')[2])
             self.map_tag_name = map_tag_name
+        self._update_use_index()
+
+    def _update_use_index(self):
+        # The index based shortcuts below are only used when they are exactly
+        # equivalent to the generic code: the stock selector implementations
+        # (they rely on their behavior) and a root that is the root of its
+        # document (the id and class maps are built from the whole document,
+        # the other maps only from the tree below root).
+        try:
+            self.use_index = self.dispatch_map is default_dispatch_map and self.root.getparent() is None
+        except AttributeError:
+            self.use_index = False
 
     def __call__(self, selector, root=None):
         ''' Return an iterator over all matching tags, in document order.
@@ -179,10 +195,16 @@ class Select:
         specify root, then only tags that are root or descendants of root are
         returned. Note that this can be very expensive if root has a lot of
         descendants. '''
+        yield from self.select_parsed(get_parsed_selector(selector), root)
+
+    def select_parsed(self, parsed_selectors, root=None):
+        ''' Same as calling this object with a selector string, but takes the
+        result of :func:`css_selectors.parser.parse` (callers that evaluate the
+        same selector against many documents can then parse it only once). '''
         seen = set()
         if root is not None:
             root = frozenset(self.itertag(root))
-        for parsed_selector in get_parsed_selector(selector):
+        for parsed_selector in parsed_selectors:
             for item in self.iterparsedselector(parsed_selector):
                 if item not in seen and (root is None or item in root):
                     yield item
@@ -259,6 +281,28 @@ class Select:
         return self._attrib_space_map
 
     @property
+    def doc_order(self):
+        ''' A tuple (elements, index, last) with all the elements in document
+        order, a map from element to its position in that list and, for every
+        position, the position of the last descendant of that element. So the
+        descendants of elements[i] are elements[i + 1:last[i] + 1]. '''
+        if self._doc_order is None:
+            elements = list(self.itertag())
+            index = {elem: i for i, elem in enumerate(elements)}
+            last = list(range(len(elements)))
+            for i in range(len(elements) - 1, 0, -1):
+                p = index.get(elements[i].getparent())
+                if p is not None and last[i] > last[p]:
+                    last[p] = last[i]
+            self._doc_order = elements, index, last
+        return self._doc_order
+
+    def sorted_by_document_order(self, elems):
+        ''' Return the elements, which must be in the tree, in document order. '''
+        index = self.doc_order[1]
+        return sorted(elems, key=index.__getitem__)
+
+    @property
     def lang_map(self):
         if self._lang_map is None:
             self._lang_map = lm = defaultdict(OrderedSet)
@@ -296,11 +340,49 @@ class Select:
     def iterclasstags(self):
         return get_compiled_xpath('//*[@class]')(self.root)
 
+    def sibling_table(self, parent):
+        ''' A map from every child node of parent to a tuple (position among
+        all the children of parent, number of children of parent, number of
+        preceding sibling elements with the same name, number of following
+        sibling elements with the same name). The last two are None for nodes
+        that are not elements. Computed once per parent, instead of once per
+        child (which makes evaluating :nth-child() and friends quadratic in the
+        number of siblings). '''
+        if self._sibling_tables is None:
+            self._sibling_tables = {}
+        try:
+            return self._sibling_tables[parent]
+        except KeyError:
+            pass
+        nodes = list(parent)
+        names = [self.map_tag_name(x.tag) if isinstance(x.tag, str) else None for x in nodes]
+        totals = {}
+        for name in names:
+            if name is not None:
+                totals[name] = totals.get(name, 0) + 1
+        seen = {}
+        table = {}
+        n = len(nodes)
+        for i, (node, name) in enumerate(zip(nodes, names)):
+            if name is None:
+                table[node] = i, n, None, None
+            else:
+                before = seen.get(name, 0)
+                seen[name] = before + 1
+                table[node] = i, n, before, totals[name] - before - 1
+        self._sibling_tables[parent] = table
+        return table
+
     def sibling_count(self, child, before=True, same_type=False):
         ' Return the number of siblings before or after child or raise ValueError if child has no parent. '
         parent = child.getparent()
         if parent is None:
             raise ValueError('Child has no parent')
+        if self.use_index:
+            pos, n, same_before, same_after = self.sibling_table(parent)[child]
+            if same_type:
+                return same_before if before else same_after
+            return pos if before else n - pos - 1
         if same_type:
             siblings = OrderedSet(child.itersiblings(preceding=before))
             return len(self.element_map[self.map_tag_name(child.tag)] & siblings)
@@ -314,6 +396,11 @@ class Select:
         parent = child.getparent()
         if parent is None:
             raise ValueError('Child has no parent')
+        if self.use_index:
+            pos, n, same_before, same_after = self.sibling_table(parent)[child]
+            if same_type:
+                return same_before + same_after
+            return n - 1
         if same_type:
             siblings = OrderedSet(chain(child.itersiblings(preceding=False), child.itersiblings(preceding=True)))
             return len(self.element_map[self.map_tag_name(child.tag)] & siblings)
@@ -346,6 +433,25 @@ def select_combinedselector(cache, combined):
 def select_descendant(cache, left, right):
     """right is a child, grand-child or further descendant of left"""
     right = always_in if right is None else frozenset(right)
+    if right is not always_in and cache.use_index:
+        left = list(left)
+        elements, index, last = cache.doc_order
+        # Visiting all the descendants of every element of left is expensive
+        # when left is large or contains elements with large subtrees and right
+        # is small. Instead look for the elements of right inside the range of
+        # the document order that is covered by the subtree of each element of left.
+        if left and right:
+            try:
+                sizes = sum(last[index[x]] - index[x] for x in left)
+                if sizes > len(right):
+                    positions = sorted(map(index.__getitem__, right))
+                    for ancestor in left:
+                        i = index[ancestor]
+                        for k in range(bisect_right(positions, i), bisect_right(positions, last[i])):
+                            yield elements[positions[k]]
+                    return
+            except KeyError:
+                pass  # An element that is not in the tree, use the generic code
     for ancestor in left:
         for descendant in cache.iterdescendants(ancestor):
             if descendant in right:
@@ -355,6 +461,23 @@ def select_descendant(cache, left, right):
 def select_child(cache, left, right):
     """right is an immediate child of left"""
     right = always_in if right is None else frozenset(right)
+    if right is not always_in and cache.use_index:
+        left = list(left)
+        elements, index, last = cache.doc_order
+        # See select_descendant()
+        if left and right:
+            try:
+                sizes = sum(last[index[x]] - index[x] for x in left)
+                if sizes > len(right):
+                    by_parent = {}
+                    for pos in sorted(map(index.__getitem__, right)):
+                        child = elements[pos]
+                        by_parent.setdefault(child.getparent(), []).append(child)
+                    for parent in left:
+                        yield from by_parent.get(parent, ())
+                    return
+            except KeyError:
+                pass
     for parent in left:
         for child in cache.iterchildren(parent):
             if child in right:

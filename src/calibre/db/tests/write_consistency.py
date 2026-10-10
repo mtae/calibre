@@ -743,11 +743,6 @@ CASES = (
 # the case, the kinds of problems (see BaseTest.find_library_inconsistencies(), lost-file is data loss) and
 # the faults after which they are found. The fault ids are described in fault_injection.py
 KNOWN_INCONSISTENT = known_table(
-    # DATA LOSS: the existing file is truncated (opened for writing) before the new contents are read, so a failure to read them destroys the old
-    # contents
-    ('add_extra_files_replace_unreadable', {'lost-file'}, (
-        'self',
-    )),
     # The in-memory formats are updated before the row of the data table is written, and the composite cache is cleared by update_last_modified(),
     # which is last
     ('add_format_new', {'field:formats', 'format-file-missing', 'formats'}, (
@@ -759,10 +754,6 @@ KNOWN_INCONSISTENT = known_table(
     # The file was replaced, but its new size was not recorded
     ('add_format_replace', {'format-size'}, (
         'file:backend.add_format@1/after',
-    )),
-    # DATA LOSS: as for extra files, the existing format file is truncated before the new contents are read
-    ('add_format_replace_unreadable', {'format-size', 'lost-file'}, (
-        'self',
     )),
     # The row of the book is inserted (and committed) before the metadata is set, if that fails the cache never learns of the book
     ('create_book_entry', {'ids'}, (

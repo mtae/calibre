@@ -839,8 +839,9 @@ class Cache:
         references resources their hashes must be present in resource_hashes. Set remove_unused_resources to True to cleanup unused
         resources, note that updating a note automatically cleans up resources pertaining to that note anyway.
         """
-        ans = self.backend.set_notes_for(field, item_id, doc, searchable_text, resource_hashes, remove_unused_resources)
-        self.event_dispatcher(EventType.notes_changed, field, frozenset({item_id}))
+        with self._change() as change:
+            ans = self.backend.set_notes_for(field, item_id, doc, searchable_text, resource_hashes, remove_unused_resources)
+            change.after_commit(partial(self.event_dispatcher, EventType.notes_changed, field, frozenset({item_id})))
         return ans
 
     _set_notes_for = set_notes_for
@@ -869,8 +870,9 @@ class Cache:
     @quiet_write_api
     def unretire_note_for(self, field, item_id) -> int:
         "Unretire a previously retired note for the specified item. Notes are retired when an item is removed from the database"
-        ans = self.backend.unretire_note_for(field, item_id)
-        self.event_dispatcher(EventType.notes_changed, field, frozenset({item_id}))
+        with self._change() as change:
+            ans = self.backend.unretire_note_for(field, item_id)
+            change.after_commit(partial(self.event_dispatcher, EventType.notes_changed, field, frozenset({item_id})))
         return ans
 
     _unretire_note_for = unretire_note_for
@@ -898,8 +900,9 @@ class Cache:
                 except AttributeError:
                     ctime, mtime = st.st_ctime, st.st_mtime  # type: ignore
             basedir = os.path.dirname(os.path.abspath(path_to_html_file))
-        ans = self.backend.import_note(field, item_id, html, basedir, ctime, mtime)
-        self.event_dispatcher(EventType.notes_changed, field, frozenset({item_id}))
+        with self._change() as change:
+            ans = self.backend.import_note(field, item_id, html, basedir, ctime, mtime)
+            change.after_commit(partial(self.event_dispatcher, EventType.notes_changed, field, frozenset({item_id})))
         return ans
 
     _import_note = import_note
@@ -3058,6 +3061,17 @@ class Cache:
         :param restrict_to_book_ids: An optional set of book ids for which the rename is to be performed, defaults to all books.
         """
         f = self.fields[field]
+        # Every book that has one of the items: the books whose caches are cleared if the rename fails
+        col_book_map = getattr(f.table, 'col_book_map', {})
+        books_with_items = set()
+        for item_id in item_id_to_new_name_map:
+            books_with_items |= col_book_map.get(item_id, ())
+        with self._change() as change:
+            change.modifies(f.table, self.fields['last_modified'].table)
+            change.touch(field, books_with_items, None)
+            return self._rename_items_in_change(change, f, field, item_id_to_new_name_map, change_index, restrict_to_book_ids)
+
+    def _rename_items_in_change(self, change, f, field, item_id_to_new_name_map, change_index, restrict_to_book_ids):
         affected_books = set()
         try:
             sv = f.metadata['is_multiple']['ui_to_list']
@@ -3117,7 +3131,7 @@ class Cache:
                 ab, idm = self._rename_items(field, default_process_map, change_index=change_index)
                 affected_books.update(ab)
                 id_map.update(idm)
-            self.event_dispatcher(EventType.items_renamed, field, affected_books, id_map)
+            change.after_commit(partial(self.event_dispatcher, EventType.items_renamed, field, affected_books, id_map))
             return affected_books, id_map
 
         try:
@@ -3144,7 +3158,8 @@ class Cache:
                     'author_sort',
                     {k: ' & '.join(v) for k, v in self._author_sort_strings_for_books(affected_books).items()},
                 )
-                self._update_path(affected_books, mark_as_dirtied=False)
+                # Moves the folders of the books, which cannot be rolled back, so it runs after the commit
+                change.after_commit(partial(self._update_path, affected_books, mark_as_dirtied=False))
             elif change_index and hasattr(f, 'index_field') and tweaks['series_index_auto_increment'] != 'no_change':
                 for book_id in moved_books:
                     self._set_field(
@@ -3152,8 +3167,8 @@ class Cache:
                         {book_id: self._get_next_series_num_for(self._fast_field_for(f, book_id), field=field)},
                     )
             self._mark_as_dirty(affected_books)
-            self._clear_link_map_cache(affected_books)
-        self.event_dispatcher(EventType.items_renamed, field, affected_books, id_map)
+            change.after_commit(partial(self._clear_link_map_cache, affected_books))
+        change.after_commit(partial(self.event_dispatcher, EventType.items_renamed, field, affected_books, id_map))
         return affected_books, id_map
 
     _rename_items = rename_items
@@ -3167,14 +3182,21 @@ class Cache:
         field = self.fields[field]
         if restrict_to_book_ids is not None and not isinstance(restrict_to_book_ids, (MutableSet, Set)):
             restrict_to_book_ids = frozenset(restrict_to_book_ids)
-        affected_books = field.table.remove_items(item_ids, self.backend, restrict_to_book_ids=restrict_to_book_ids)
-        if affected_books:
-            if hasattr(field, 'index_field'):
-                self._set_field(field.index_field.name, {bid: 1.0 for bid in affected_books})
-            else:
-                self._mark_as_dirty(affected_books)
-            self._clear_link_map_cache(affected_books)
-        self.event_dispatcher(EventType.items_removed, field, affected_books, item_ids)
+        col_book_map = getattr(field.table, 'col_book_map', {})
+        books_with_items = set()
+        for item_id in item_ids:
+            books_with_items |= col_book_map.get(item_id, ())
+        with self._change() as change:
+            change.modifies(field.table, self.fields['last_modified'].table)
+            change.touch(field.name, books_with_items, None)
+            affected_books = field.table.remove_items(item_ids, self.backend, restrict_to_book_ids=restrict_to_book_ids)
+            if affected_books:
+                if hasattr(field, 'index_field'):
+                    self._set_field(field.index_field.name, {bid: 1.0 for bid in affected_books})
+                else:
+                    self._mark_as_dirty(affected_books)
+                change.after_commit(partial(self._clear_link_map_cache, affected_books))
+            change.after_commit(partial(self.event_dispatcher, EventType.items_removed, field, affected_books, item_ids))
         return affected_books
 
     _remove_items = remove_items
@@ -3319,37 +3341,45 @@ class Cache:
 
     @write_api
     def set_sort_for_authors(self, author_id_to_sort_map, update_books=True):
-        sort_map = self.fields['authors'].table.set_sort_names(author_id_to_sort_map, self.backend)
-        changed_books = set()
-        if update_books:
-            val_map = {}
-            for author_id in sort_map:
-                books = self._books_for_field('authors', author_id)
-                changed_books |= books
-                for book_id in books:
-                    authors = self._field_ids_for('authors', book_id)
-                    adata = self._author_data(authors)
-                    sorts = [adata[x]['sort'] for x in authors]
-                    val_map[book_id] = ' & '.join(sorts)
-            if val_map:
-                self._set_field('author_sort', val_map)
-        if changed_books:
-            self._mark_as_dirty(changed_books)
-            self._clear_link_map_cache(changed_books)
+        table = self.fields['authors'].table
+        with self._change() as change:
+            change.modifies(table, self.fields['last_modified'].table)
+            change.touch('authors', (), None, False)
+            sort_map = table.set_sort_names(author_id_to_sort_map, self.backend)
+            changed_books = set()
+            if update_books:
+                val_map = {}
+                for author_id in sort_map:
+                    books = self._books_for_field('authors', author_id)
+                    changed_books |= books
+                    for book_id in books:
+                        authors = self._field_ids_for('authors', book_id)
+                        adata = self._author_data(authors)
+                        sorts = [adata[x]['sort'] for x in authors]
+                        val_map[book_id] = ' & '.join(sorts)
+                if val_map:
+                    self._set_field('author_sort', val_map)
+            if changed_books:
+                self._mark_as_dirty(changed_books)
+                change.after_commit(partial(self._clear_link_map_cache, changed_books))
         return changed_books
 
     _set_sort_for_authors = set_sort_for_authors
 
     @write_api
     def set_link_for_authors(self, author_id_to_link_map):
-        link_map = self.fields['authors'].table.set_links(author_id_to_link_map, self.backend)
-        changed_books = set()
-        for author_id in link_map:
-            changed_books |= self._books_for_field('authors', author_id)
-        if changed_books:
-            self._mark_as_dirty(changed_books)
-            self._clear_link_map_cache(changed_books)
-        self.event_dispatcher(EventType.links_changed, 'authors', frozenset(author_id_to_link_map))
+        table = self.fields['authors'].table
+        with self._change() as change:
+            change.modifies(table, self.fields['last_modified'].table)
+            change.touch('authors', (), None, False)
+            link_map = table.set_links(author_id_to_link_map, self.backend)
+            changed_books = set()
+            for author_id in link_map:
+                changed_books |= self._books_for_field('authors', author_id)
+            if changed_books:
+                self._mark_as_dirty(changed_books)
+                change.after_commit(partial(self._clear_link_map_cache, changed_books))
+            change.after_commit(partial(self.event_dispatcher, EventType.links_changed, 'authors', frozenset(author_id_to_link_map)))
         return changed_books
 
     _set_link_for_authors = set_link_for_authors
@@ -3469,14 +3499,17 @@ class Cache:
             id_to_link_map = {fid: value_to_link_map[k] for k, fid in fids.items() if fid is not None and not lm.get(fid)}
         else:
             id_to_link_map = {fid: value_to_link_map[k] for k, fid in fids.items() if fid is not None}
-        result_map = table.set_links(id_to_link_map, self.backend)
-        changed_books = set()
-        for id_ in result_map:
-            changed_books |= self._books_for_field(field, id_)
-        if changed_books:
-            self._mark_as_dirty(changed_books)
-            self._clear_link_map_cache(changed_books)
-        self.event_dispatcher(EventType.links_changed, field, frozenset(id_to_link_map))
+        with self._change() as change:
+            change.modifies(table, self.fields['last_modified'].table)
+            change.touch(field, (), None, False)
+            result_map = table.set_links(id_to_link_map, self.backend)
+            changed_books = set()
+            for id_ in result_map:
+                changed_books |= self._books_for_field(field, id_)
+            if changed_books:
+                self._mark_as_dirty(changed_books)
+                change.after_commit(partial(self._clear_link_map_cache, changed_books))
+            change.after_commit(partial(self.event_dispatcher, EventType.links_changed, field, frozenset(id_to_link_map)))
         return changed_books
 
     _set_link_map = set_link_map

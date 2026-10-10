@@ -130,12 +130,15 @@ class Notes:
             self.remove_unreferenced_resources(conn)
 
     def remove_unreferenced_resources(self, conn):
-        found = False
-        for (rhash,) in conn.get('SELECT hash FROM notes_db.resources WHERE hash NOT IN (SELECT resource FROM notes_db.notes_resources_link)'):
-            found = True
-            remove_with_retry(self.path_for_resource(rhash))
-        if found:
+        hashes = [x for (x,) in conn.get('SELECT hash FROM notes_db.resources WHERE hash NOT IN (SELECT resource FROM notes_db.notes_resources_link)')]
+        if hashes:
             conn.execute('DELETE FROM notes_db.resources WHERE hash NOT IN (SELECT resource FROM notes_db.notes_resources_link)')
+            # The files cannot be restored, so they are removed only when the transaction is committed
+            self.do_file_operation(self.remove_resource_files, hashes)
+
+    def remove_resource_files(self, resource_hashes):
+        for rhash in resource_hashes:
+            remove_with_retry(self.path_for_resource(rhash))
 
     def path_for_resource(self, resource_hash: str) -> str:
         hashalg, digest = resource_hash.split(':', 1)
@@ -185,11 +188,15 @@ class Notes:
             ''',
                 tuple((note_id, x) for x in resources_to_potentially_remove),
             )
+        # The files cannot be restored, so they are removed only when the transaction is committed
+        self.do_file_operation(self.remove_unreferenced_resource_files, conn, resources_to_potentially_remove)
+
+    def remove_unreferenced_resource_files(self, conn, resource_hashes):
         stmt = '''
             WITH resources_table(value) AS (VALUES {})
             SELECT value FROM resources_table WHERE value NOT IN (SELECT resource FROM notes_db.notes_resources_link)
-        '''.format(','.join(repeat('(?)', len(resources_to_potentially_remove))))
-        for (x,) in conn.execute(stmt, resources_to_potentially_remove):
+        '''.format(','.join(repeat('(?)', len(resource_hashes))))
+        for (x,) in tuple(conn.execute(stmt, tuple(resource_hashes))):
             p = self.path_for_resource(x)
             remove_with_retry(p)
             remove_with_retry(p + METADATA_EXT)
@@ -204,19 +211,27 @@ class Notes:
 
     def set_backup_for(self, field_name, item_id, item_value, marked_up_text, searchable_text, resource_hashes):
         path = make_long_path_useable(os.path.join(self.backup_dir, field_name, str(item_id)))
+        # Written to a temporary file that replaces the backup, so that a failure does not destroy the existing backup
+        tmp = path + '.tmp'
         try:
-            f = open(path, 'wb')
+            f = open(tmp, 'wb')
         except FileNotFoundError:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            f = open(path, 'wb')
-        with f:
-            f.write(marked_up_text.encode('utf-8'))
-            f.write(SEP)
-            f.write(searchable_text.encode('utf-8'))
-            f.write(SEP)
-            f.write('\n'.join(resource_hashes).encode('utf-8'))
-            f.write(SEP)
-            f.write(item_value.encode('utf-8'))
+            f = open(tmp, 'wb')
+        try:
+            with f:
+                f.write(marked_up_text.encode('utf-8'))
+                f.write(SEP)
+                f.write(searchable_text.encode('utf-8'))
+                f.write(SEP)
+                f.write('\n'.join(resource_hashes).encode('utf-8'))
+                f.write(SEP)
+                f.write(item_value.encode('utf-8'))
+            os.replace(tmp, path)
+        except BaseException:
+            with suppress(OSError):
+                os.remove(tmp)
+            raise
 
     def path_to_retired_dir_for_item(self, field_name, item_id, item_value):
         key = icu_lower(item_value or '')
@@ -267,7 +282,7 @@ class Notes:
             add_item_value_to_searchable_text=False,
         )
         if note_id > -1:
-            remove_with_retry(srcdir, is_dir=True)
+            self.do_file_operation(remove_with_retry, srcdir, True)
         return note_id
 
     def remove_retired_entry(self, field_name, item_id, item_value):
@@ -310,7 +325,7 @@ class Notes:
         resources_to_potentially_remove = old_resources - new_resources
         resources_to_add = new_resources - old_resources
         if note_id is None:
-            self.remove_retired_entry(field_name, item_id, item_value)
+            self.do_file_operation(self.remove_retired_entry, field_name, item_id, item_value)
             if ctime is not None or mtime is not None:
                 now = time.time()
                 if ctime is None:

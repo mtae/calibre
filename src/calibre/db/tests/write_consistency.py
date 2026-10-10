@@ -743,10 +743,6 @@ CASES = (
 # the case, the kinds of problems (see BaseTest.find_library_inconsistencies(), lost-file is data loss) and
 # the faults after which they are found. The fault ids are described in fault_injection.py
 KNOWN_INCONSISTENT = known_table(
-    # The note was written to the database but not its backup file
-    ('import_note', {'note-backup-missing'}, (
-        'file:notes.set_backup_for@1',
-    )),
     # A stray cover.jpg is left
     ('move_book_from_trash', {'stray-cover'}, (
         'file:copy_tree@1/after',
@@ -779,36 +775,8 @@ KNOWN_INCONSISTENT = known_table(
         'file:notes.remove_with_retry@2',
         'sql:delete from tags where id=?@1',
     )),
-    # The in-memory tables are updated before the SQL statements are executed
-    ('remove_items_custom', {'field:#tags', 'items:#tags'}, (
-        'sql:delete from books_custom_column_7_link where value=?@1',
-    )),
-    ('remove_items_custom', {'items:#tags'}, (
-        'sql:delete from custom_column_7 where id=?@1',
-    )),
-    # The in-memory tables are updated before the SQL statements, and the note of the item (a row and files) is removed first
-    ('remove_items_tags', {'field:tags', 'items:tags', 'note-orphan'}, (
-        'sql:delete from notes_db.notes where id=?@1',
-    )),
-    ('remove_items_tags', {'field:tags', 'items:tags'}, (
-        'file:notes.retire_entry@1',
-        'file:notes.retire_entry@1/after',
-        'file:notes.remove_with_retry@1',
-        'file:notes.remove_with_retry@2',
-        'sql:delete from books_tags_link where tag=?@1',
-    )),
-    ('remove_items_tags', {'composite-cache', 'items:tags'}, (
-        'sql:delete from tags where id=?@1',
-    )),
-    ('remove_items_tags', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The authors are renamed (and committed) first, then the folders of the books are moved one at a time, failures leave some books in new
+    # The folders of the books are moved one at a time (inside the loop that updates their paths), failures leave some books in new
     # folders and others in old ones with inconsistent paths
-    ('rename_items_authors', {'field:authors', 'items:authors'}, (
-        'sql:update authors set name=? where id=?@1',
-        'sql:update authors set name=? where id=?@2',
-    )),
     ('rename_items_authors', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',
         'sql:update data set name=? where book=? and format=?@1',
@@ -826,37 +794,6 @@ KNOWN_INCONSISTENT = known_table(
         'sql:update books set path=? where id=?@1',
         'sql:update books set path=? where id=?@2',
     )),
-    # The in-memory tables are updated before the SQL statement is executed
-    ('rename_items_series', {'field:series', 'items:series'}, (
-        'sql:update series set name=? where id=?@1',
-    )),
-    # The in-memory tables are updated before the SQL statement is executed
-    ('rename_items_tags', {'field:tags', 'items:tags'}, (
-        'sql:update tags set name=? where id=?@1',
-    )),
-    ('rename_items_tags', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The note of the merged item is moved with several SQL statements and file operations that are not in one transaction
-    ('rename_items_tags_merge', {'field:tags', 'items:tags', 'note-orphan'}, (
-        'sql:delete from books_tags_link where book=? and tag=?@1',
-    )),
-    ('rename_items_tags_merge', {'composite-cache', 'field:tags', 'items:tags', 'note-orphan'}, (
-        'file:notes.remove_with_retry@1',
-        'sql:insert into notes_db.notes (item,colname,doc,searchable_text) values (?,?,?,?) returning n@1',
-        'file:notes.set_backup_for@1/after',
-        'sql:update books_tags_link set tag=? where tag=?;@1',
-    )),
-    ('rename_items_tags_merge', {'composite-cache', 'field:tags', 'items:tags', 'note-backup-missing', 'note-orphan'}, (
-        'sql:insert into notes_db.notes_resources_link (note,resource) values (?,?);@1',
-        'file:notes.set_backup_for@1',
-    )),
-    ('rename_items_tags_merge', {'composite-cache', 'items:tags', 'note-orphan'}, (
-        'sql:delete from tags where id=?@1',
-    )),
-    ('rename_items_tags_merge', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
-    )),
     # The saved search is stored in memory before it is written to the preferences
     ('saved_search_add', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',
@@ -873,14 +810,6 @@ KNOWN_INCONSISTENT = known_table(
     ('set_authors', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
     )),
-    # The in-memory tables are updated before the SQL statement is executed
-    ('set_link_for_authors', {'items:authors'}, (
-        'sql:update authors set link=? where id=?@1',
-    )),
-    # The in-memory tables are updated before the SQL statement is executed
-    ('set_link_map', {'items:tags'}, (
-        'sql:update tags set link=? where id=?@1',
-    )),
     # The title and authors are set, and the folder moved, before the other fields
     ('set_metadata_rename', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',
@@ -889,15 +818,6 @@ KNOWN_INCONSISTENT = known_table(
         'file:copier.copy_all@1',
         'file:copier.delete_sources@1',
         'file:remove_dir_if_empty@1',
-    )),
-    # The note is written in several steps that are not in a transaction, the backup file is written last
-    ('set_notes_new', {'note-backup-missing'}, (
-        'sql:insert into notes_db.notes_resources_link (note,resource) values (?,?);@1',
-        'file:notes.set_backup_for@1',
-    )),
-    # The in-memory tables are updated before the SQL statement is executed
-    ('set_sort_for_authors', {'items:authors'}, (
-        'sql:update authors set sort=? where id=?@1',
     )),
     ('set_title_two_books', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',
@@ -913,11 +833,6 @@ KNOWN_INCONSISTENT = known_table(
     ('set_title_two_books', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
         'sql:update books set path=? where id=?@2',
-    )),
-    # The note is restored in several steps that are not in a transaction, the backup file is written last
-    ('unretire_note_for', {'note-backup-missing'}, (
-        'sql:insert into notes_db.notes_resources_link (note,resource) values (?,?);@1',
-        'file:notes.set_backup_for@1',
     )),
     # The folder of the book is copied to the new name, the sources deleted, and only then are the rows of the data and books tables updated
     ('update_path', {'composite-cache', 'folder-missing', 'orphan-folder'}, (

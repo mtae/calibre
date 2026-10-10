@@ -967,6 +967,22 @@ class CacheRecomputeTest(BaseTest):
         # saved_search_rename(), did not call clear_search_caches()
         self.assert_same_as_fresh(cache, 'search', 'search:"=Mine"')
 
+    def test_stale_composite_after_move_format_from_trash(self):
+        "A composite column that uses the formats and a cached search are up to date after a format is restored from the trash"
+        cache = self.cache_with_composites(cfmt='{formats}')
+        book_id = 1
+        before = cache.field_for('#cfmt', book_id)
+        fmt = cache.formats(book_id)[0]
+        self.assertEqual({book_id}, cache.search(f'formats:{fmt}') & {book_id})
+        cache.remove_formats({book_id: [fmt]})
+        self.assertNotIn(fmt, cache.field_for('#cfmt', book_id))
+        self.assertNotIn(book_id, cache.search(f'formats:{fmt}'))
+        cache.move_format_from_trash(book_id, fmt)
+        self.assertEqual(before, cache.field_for('#cfmt', book_id))
+        self.assertIn(book_id, cache.search(f'formats:{fmt}'))
+        self.assert_same_as_fresh(cache, 'field_for', '#cfmt', book_id)
+        self.assert_same_as_fresh(cache, 'search', f'formats:{fmt}')
+
     def test_stale_custom_series_index(self):
         "Setting a custom series to a different series with the same index as before keeps that index in the database"
         cache = self.init_cache()

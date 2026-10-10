@@ -798,12 +798,7 @@ KNOWN_INCONSISTENT = known_table(
     ('move_book_from_trash', {'composite-cache', 'field:formats', 'format-file-missing', 'formats', 'stray-cover'}, (
         'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
     )),
-    # update_last_modified() is never called, so the cached composite columns that use formats are stale even when it works. And in-memory formats
-    # are updated before the row of the data table is written
-    ('move_format_from_trash', {'composite-cache'}, (
-        'normal',
-        'file:rmtree_with_retry@1',
-    )),
+    # The in-memory formats are updated before the row of the data table is written
     ('move_format_from_trash', {'field:formats', 'format-file-missing', 'formats'}, (
         'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
     )),

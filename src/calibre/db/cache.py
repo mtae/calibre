@@ -2622,6 +2622,13 @@ class Cache:
                     self._record_format_added(book_id, fmt, fname, size, change)
                     self._update_last_modified((book_id,))
                     self._queue_pages_scan(book_id)
+                    # The format file is only moved into place after the commit, but code running inside this
+                    # change (rendering composite columns, for {formats}, which lists only the formats whose
+                    # files exist, or reading format metadata) sees it missing and caches that: discard those
+                    # values again after the commit
+                    change.after_commit(lambda: self.format_metadata_cache[book_id].pop(fmt, None))
+                    change.after_commit(partial(self._clear_composite_caches, (book_id,)))
+                    change.after_commit(partial(self._clear_search_caches, (book_id,)))
                     change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
             finally:
                 if needs_close:

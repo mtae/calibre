@@ -1033,7 +1033,7 @@ KNOWN_OFFENDERS = {
     ('ebooks/conversion/preprocess.py', 'book_designer_rules', 'stacked'): (2, 'line 433, 437: [^><]*? followed by (align=)* and [^><]*?'),
     ('ebooks/conversion/preprocess.py', 'pdftohtml_rules', 'stacked'): (1, 'line 407: <br>\\s*(([*#=] *){3,})\\s*<br>: spaces shared by \\s* and the group, not slow on the br_star_run input'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.chapter_head', 'stacked'): (1, 'line 56: ^\\s*(.*?)\\s*$, applied to one heading, not measured'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.detect_whitespace', 'stacked'): (4, 'line 646, 651, 656, 678: blanks_n_nopunct/blanks_between_paragraphs: (blank paragraphs\\s*){1,}\\s*'),
+    ('ebooks/conversion/utils.py', 'HeuristicProcessor.detect_whitespace', 'stacked'): (3, 'line 646, 651, 678: blanks_n_nopunct/blanks_between_paragraphs: (blank paragraphs\\s*){1,}\\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.fix_nbsp_indents', 'stacked'): (1, 'line 559: (<span>\\s*)+ \\s* before the nbsp run'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_user_break', 'stacked'): (1, 'line 768: .*?width(:|=)(?P<wnum>\\d+).*, applied to the scene break string the user typed, not to the book'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.punctuation_unwrap', 'stacked'): (3, 'line 513-515: line joining: \\s* (style_close)? (\\s*</p>)? \\s*'),

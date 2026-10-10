@@ -694,9 +694,13 @@ class HeuristicProcessor:
             r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
+        # Each \s* is followed by a tag (which starts with <) or by the content, so
+        # possessive \s*+ gives the same matches. The {1,} repeats stay greedy: with
+        # fewer repeats, the content can start at the last blank paragraph (an empty
+        # scene break), and that match must still be found.
         blanks_around_scene_breaks = re.compile(
-            r'(?P<initparas>(<(p|div)[^>]*>\s*</(p|div)>\s*){1,}\s*)?'
-            r'(?P<content><p class="scenebreak"[^>]*>.*?</p>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
+            r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
+            r'(?P<content><p class="scenebreak"[^>]*+>.*?</p>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
         blanks_n_nopunct = re.compile(

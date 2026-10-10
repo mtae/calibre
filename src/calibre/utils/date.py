@@ -345,6 +345,9 @@ def fd_repl_func(dt, ampm, mo):
     return fd_function_index[s[0]](dt, ampm, s)
 
 
+format_date_pat = re.compile(r'(s{1,2})|(m{1,2})|(h{1,2})|(ap)|(AP)|(aP)|(Ap)|(d{1,4}|M{1,4}|(?:yyyy|yy))')
+
+
 def format_date(dt, format, assume_utc=False, as_utc=False):
     """Return a date formatted as a string using a subset of Qt's formatting codes"""
     format = format or 'dd MMM yyyy'
@@ -361,7 +364,7 @@ def format_date(dt, format, assume_utc=False, as_utc=False):
         return ''
 
     repl_func = partial(fd_repl_func, dt, 'ap' in format.lower())
-    return re.sub(r'(s{1,2})|(m{1,2})|(h{1,2})|(ap)|(AP)|(aP)|(Ap)|(d{1,4}|M{1,4}|(?:yyyy|yy))', repl_func, format)
+    return format_date_pat.sub(repl_func, format)
 
 
 # }}}

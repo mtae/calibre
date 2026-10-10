@@ -485,6 +485,8 @@ def open_library(test, case):
     library_path = test.mkdtemp()
     shutil.copytree(template_library(test), library_path, dirs_exist_ok=True)
     cache = test.init_cache(library_path)
+    # Only the consistency of what is written matters here, not that it survives a power failure, and fsync is slow
+    cache.backend.execute('PRAGMA synchronous=OFF')
     stop_page_counting(cache)
     if case.setup is not None:
         case.setup(cache)
@@ -496,7 +498,8 @@ def run_case(test, case, fault=None, success_state=None):
     and, for a normal run, the Hooks that recorded the trace."""
     cache = open_library(test, case)
     before = snapshot(cache)
-    state = digest(cache) if COLLECT_TABLE else None
+    # Reading all the fields also fills the cache of the composite columns, so that stale values can be detected
+    state = digest(cache)
     atomic_before = case.state(cache) if case.state is not None else None
     error = ''
     with Hooks(cache, fault) as hooks:
@@ -537,6 +540,9 @@ def run_case(test, case, fault=None, success_state=None):
         outcome.retry_problems, retry_lost = check(test, cache, before, case)
         if outcome.retry_problems or retry_lost:
             outcome.retry = 'inconsistent'
+    # Do not keep the hundreds of caches that a case opens until the end of the test
+    test.objects_to_close.remove(cache)
+    cache.close()
     return outcome, hooks
 
 

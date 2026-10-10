@@ -1425,7 +1425,13 @@ class DB:
         # Note: the caller is responsible for scheduling a metadata backup if necessary
         return changed
 
-    def create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):  # {{{
+    def create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):
+        # The row of the custom_columns table, the tables, views and triggers of the column and the preference are created in one
+        # transaction, so that a failure cannot leave a column without its tables or tables without a column
+        with self.conn:
+            return self._create_custom_column(label, name, datatype, is_multiple, editable=editable, display=display)
+
+    def _create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):  # {{{
         import re
 
         if not label:
@@ -2118,6 +2124,22 @@ class DB:
         if not os.path.exists(path):
             os.makedirs(path)
         size = 0
+        tmp_path = None
+        if not (isinstance(stream, str) and stream) and (not getattr(stream, 'name', False) or not samefile(dest, stream.name)):
+            # Read the new contents into a temporary file in the same folder before touching the existing format file, so that a
+            # stream that fails part way cannot destroy the existing file. It replaces the existing file atomically below.
+            tmp_path = os.path.join(path, f'.{uuid.uuid4().hex[:16]}.tmp')
+            try:
+                with open(tmp_path, 'wb') as f:
+                    shutil.copyfileobj(stream, f)
+                    size = f.tell()
+                if mtime is not None:
+                    os.utime(tmp_path, (mtime, mtime))
+            except BaseException:
+                with suppress(OSError):
+                    os.remove(tmp_path)
+                raise
+            stream = tmp_path
         if current_name is not None:
             old_path = os.path.join(path, current_name + fmt)
             if old_path != dest:
@@ -2138,21 +2160,22 @@ class DB:
 
         if isinstance(stream, str) and stream:
             try:
-                os.replace(stream, dest)
-            except OSError:
-                if iswindows:
-                    time.sleep(1)
+                try:
                     os.replace(stream, dest)
-                else:
-                    raise
+                except OSError:
+                    if iswindows:
+                        time.sleep(1)
+                        os.replace(stream, dest)
+                    else:
+                        raise
+            except BaseException:
+                if tmp_path is not None:
+                    with suppress(OSError):
+                        os.remove(tmp_path)
+                raise
             size = os.path.getsize(dest)
-        elif not getattr(stream, 'name', False) or not samefile(dest, stream.name):
-            with open(dest, 'wb') as f:
-                shutil.copyfileobj(stream, f)
-                size = f.tell()
-            if mtime is not None:
-                os.utime(dest, (mtime, mtime))
         elif os.path.exists(dest):
+            # the stream is the format file itself
             size = os.path.getsize(dest)
             if mtime is not None:
                 os.utime(dest, (mtime, mtime))
@@ -2403,20 +2426,26 @@ class DB:
                     dest = candidate
                     break
                 num += 1
-        if isinstance(stream, str):
-            try:
-                shutil.copy2(make_long_path_useable(stream), make_long_path_useable(dest))
-            except FileNotFoundError:
-                os.makedirs(make_long_path_useable(os.path.dirname(dest)), exist_ok=True)
-                shutil.copy2(make_long_path_useable(stream), make_long_path_useable(dest))
-        else:
-            try:
-                d = open(make_long_path_useable(dest), 'wb')
-            except FileNotFoundError:
-                os.makedirs(make_long_path_useable(os.path.dirname(dest)), exist_ok=True)
-                d = open(make_long_path_useable(dest), 'wb')
-            with d:
-                shutil.copyfileobj(stream, d)
+        # Write to a temporary file in the same folder and then atomically replace the destination, so that a source that fails
+        # part way cannot destroy an existing file
+        dirname = os.path.dirname(dest)
+        tmp = os.path.join(dirname, f'.{uuid.uuid4().hex[:16]}.tmp')
+
+        def write_tmp():
+            if isinstance(stream, str):
+                shutil.copy2(make_long_path_useable(stream), make_long_path_useable(tmp))
+            else:
+                with open(make_long_path_useable(tmp), 'wb') as d:
+                    shutil.copyfileobj(stream, d)
+
+        os.makedirs(make_long_path_useable(dirname), exist_ok=True)
+        try:
+            write_tmp()
+            os.replace(make_long_path_useable(tmp), make_long_path_useable(dest))
+        except BaseException:
+            with suppress(OSError):
+                os.remove(make_long_path_useable(tmp))
+            raise
         return os.path.relpath(dest, bookdir).replace(os.sep, '/')
 
     def write_backup(self, path, raw):
@@ -2662,12 +2691,12 @@ class DB:
         return failures
 
     def add_custom_data(self, name, val_map, delete_first):
-        if delete_first:
-            self.execute('DELETE FROM books_plugin_data WHERE name=?', (name,))
-        self.executemany(
-            'INSERT OR REPLACE INTO books_plugin_data (book, name, val) VALUES (?, ?, ?)',
-            [(book_id, name, json.dumps(val, default=to_json)) for book_id, val in val_map.items()],
-        )
+        # Serialize before changing anything, and delete and insert in one transaction, so that a failure cannot lose the old data
+        rows = [(book_id, name, json.dumps(val, default=to_json)) for book_id, val in val_map.items()]
+        with self.conn:
+            if delete_first:
+                self.execute('DELETE FROM books_plugin_data WHERE name=?', (name,))
+            self.executemany('INSERT OR REPLACE INTO books_plugin_data (book, name, val) VALUES (?, ?, ?)', rows)
 
     def get_custom_book_data(self, name, book_ids, default=None):
         book_ids = frozenset(book_ids)

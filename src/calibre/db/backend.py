@@ -2033,7 +2033,9 @@ class DB:
 
         compress_covers(cpath_map, jpeg_quality, progress_callback)
 
-    def set_cover(self, book_id, path, data, no_processing=False):
+    def set_cover(self, book_id, path, data, no_processing=False, change=None):
+        # If change (a ChangeRecord) is given, the new cover is only written to a temporary file in the folder of the book here, and the cover
+        # file is replaced (or removed, when data is None) when the change commits. The temporary file is removed if the change fails.
         path = os.path.abspath(os.path.join(self.library_path, path))
         if not os.path.exists(path):
             os.makedirs(path)
@@ -2045,25 +2047,60 @@ class DB:
         elif callable(getattr(data, 'read', None)):
             data = data.read()
         if data is None:
-            if os.path.exists(path):
-                try:
+            def remove_cover():
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        if iswindows:
+                            time.sleep(0.2)
+                        os.remove(path)
+
+            if change is None:
+                remove_cover()
+            else:
+                change.after_commit(remove_cover)
+            return
+        dest = path
+        if change is not None:
+            # The extension tells save_cover_data_to() which image format to write
+            path = os.path.join(os.path.dirname(dest), f'.{uuid.uuid4().hex[:16]}.tmp{os.path.splitext(dest)[1]}')
+
+            def remove_staged():
+                with suppress(OSError):
                     os.remove(path)
+
+            change.on_rollback(remove_staged)
+        try:
+            if no_processing:
+                with open(path, 'wb') as f:
+                    f.write(data)
+            else:
+                from calibre.utils.img import save_cover_data_to
+
+                try:
+                    save_cover_data_to(data, path)
                 except OSError:
                     if iswindows:
                         time.sleep(0.2)
+                    save_cover_data_to(data, path)
+        except BaseException:
+            if change is not None:
+                with suppress(OSError):
                     os.remove(path)
-        elif no_processing:
-            with open(path, 'wb') as f:
-                f.write(data)
-        else:
-            from calibre.utils.img import save_cover_data_to
+            raise
+        if change is not None:
+            def replace_cover():
+                try:
+                    os.replace(path, dest)
+                except OSError:
+                    if iswindows:
+                        time.sleep(0.2)
+                        os.replace(path, dest)
+                    else:
+                        raise
 
-            try:
-                save_cover_data_to(data, path)
-            except OSError:
-                if iswindows:
-                    time.sleep(0.2)
-                save_cover_data_to(data, path)
+            change.after_commit(replace_cover)
 
     def copy_format_to(self, book_id, fmt, fname, path, dest, windows_atomic_move=None, use_hardlink=False, report_file_size=None):
         path = self.format_abspath(book_id, fmt, fname, path)

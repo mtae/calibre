@@ -323,9 +323,11 @@ class Cache:
     @quiet_write_api
     def clear_search_caches(self, book_ids=None):
         self.clear_search_cache_count += 1
-        self._search_api.update_or_clear(self, book_ids)
+        # Discard the cache of the virtual libraries of books first: refreshing the cached searches renders composite columns of the
+        # changed books, which must not use the old cache for {virtual_libraries}
         self.vls_for_books_cache = None
         self.vls_for_books_lib_in_process = None
+        self._search_api.update_or_clear(self, book_ids)
 
     _clear_search_caches = clear_search_caches
 
@@ -2387,7 +2389,9 @@ class Cache:
                 raise
 
         try:
-            with self.backend.conn:  # Speed up set_metadata by not operating in autocommit mode
+            # The files of the notes of items that are no longer used are removed only after the transaction was committed, a rollback
+            # cannot restore them
+            with self.backend.notes.deferred_file_operations(), self.backend.conn:  # Speed up set_metadata by not operating in autocommit mode
                 for field in ('rating', 'series_index', 'timestamp'):
                     val = getattr(mi, field)
                     if val is not None:
@@ -3454,6 +3458,7 @@ class Cache:
     @write_api
     def saved_search_add(self, name, val):
         self._search_api.saved_searches.add(name, val)
+        self._clear_search_caches()
 
     _saved_search_add = saved_search_add
 
@@ -3589,6 +3594,11 @@ class Cache:
         size, fname = self._do_add_format(book_id, fmt, fpath, name)
         self.format_metadata_cache.pop(book_id, None)
         self._record_format_added(book_id, fmt, fname, size)
+        # Composite columns (and searches) that use the formats of the book are stale now. Unlike add_format() this does not change the
+        # last modified time of the book
+        if self.composites:
+            self._clear_composite_caches((book_id,))
+        self._clear_search_caches((book_id,))
         self._queue_pages_scan(book_id)
         self.event_dispatcher(EventType.format_added, book_id, fmt)
         self.backend.remove_trash_formats_dir_if_empty(book_id)

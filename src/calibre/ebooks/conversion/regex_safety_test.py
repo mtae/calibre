@@ -886,9 +886,15 @@ PASSING_CASES = (
     ('HTMLPreProcessor(pdftohtml)', 'accent_spaces', 800),
     ('Dehyphenator(html)', 'padded_line', 800),
     ('Dehyphenator(html)', 'many_paragraphs', 3000),
+    ('Dehyphenator(html)', 'padded_closing_tags', 800),
+    ('Dehyphenator(html)', 'hyphenated_lines_html', 8000),
+    ('Dehyphenator(txt)', 'hyphenated_lines_txt', 8000),
+    ('Dehyphenator(individual_words)', 'hyphenated_lines_txt', 8000),
+    ('HTMLPreProcessor(pdftohtml)', 'padded_hyphen_between_tags', 800),
     ('all Dehyphenator formats', 'spaces', 5000),
     ('all Dehyphenator formats', 'newlines', 5000),
     ('all Dehyphenator formats', 'tabs_and_dashes', 5000),
+    ('all Dehyphenator formats', 'one_long_word', 8000),
     ('DocAnalysis(html)', 'many_paragraphs', 3000),
     ('DocAnalysis(html)', 'unclosed_tags', 800),
     ('DocAnalysis(txt)', 'newlines', 5000),
@@ -919,10 +925,6 @@ SLOW_CASES = {
     ('HeuristicProcessor(chapter headings)', 'emphasized_padding', 400):
         'about n**4, 0.5 s for n=128, 7.5 s for n=256: utils.py:404, whitespace inside several emphasis tags',
     # Cubic
-    ('Dehyphenator(html)', 'padded_closing_tags', 400):
-        'cubic, 0.5 s for n=200, 5 s for n=400: preprocess.py:263, \\s*(?=<)(</span>)?\\s*(</[iubp]>\\s*){1,2} share whitespace',
-    ('HTMLPreProcessor(pdftohtml)', 'padded_hyphen_between_tags', 400):
-        'cubic, 4.3 s for n=400: preprocess.py:263 (see above), reached from HTMLPreProcessor.__call__ via the pdftohtml rules',
     ('HeuristicProcessor.cleanup_markup', 'padded_closing_tags', 1000):
         'cubic, 0.3 s for n=400, 1.5 s for n=800: utils.py:580, \\s*<i>\\s*(<i>\\s*</i>\\s*){0,2}\\s*</i> in the empty inline tag removal',
     ('HeuristicProcessor(all heuristics)', 'padded_closing_tags', 1000):
@@ -946,14 +948,6 @@ SLOW_CASES = {
         'quadratic: preprocess.py:96 .*?\\n through DocAnalysis',
     ('txt.convert_textile', 'unclosed_tags', 800):
         'quadratic in the length of a line, 0.8 s for n=400, 3.3 s for n=800: ebooks/textile/functions.py:485 (.+)(?:(?<!<br>)|(?<!<br />))\\n(?![#*\\s|])',
-    ('Dehyphenator(individual_words)', 'hyphenated_lines_txt', 4000):
-        'quadratic in the length of text without tags, 0.8 s for n=2000, 2.6 s for n=4000: preprocess.py:282, the lookahead (?![^<]*?>) scans to the next < or the end for every hyphen',
-    ('Dehyphenator(txt)', 'hyphenated_lines_txt', 8000):
-        'quadratic, 0.5 s for n=4000, 1.8 s for n=8000: preprocess.py:280, (?<=.{N})[^\\W\\-]+ is retried from every letter of a word',
-    ('Dehyphenator(html)', 'hyphenated_lines_html', 8000):
-        'quadratic, 0.6 s for n=4000, 2.3 s for n=8000: preprocess.py:263',
-    ('all Dehyphenator formats', 'one_long_word', 4000):
-        'quadratic in the length of a word, 0.4 s for n=2000, 1.8 s for n=4000: preprocess.py:272, :284 [^\\W\\-]+ is retried from every letter',
 }  # fmt: skip
 
 
@@ -1028,7 +1022,6 @@ _make_tests()
 # Patterns that the linter flags. The key is (file, function, rule) and the value is
 # (number of different offending patterns, what is wrong). Fix the pattern and delete the entry.
 KNOWN_OFFENDERS = {
-    ('ebooks/conversion/preprocess.py', 'Dehyphenator.__call__', 'stacked'): (1, 'line 263: html dehyphenation: [^\\W\\-]+ (-) \\s* (?=<) \\s* ... cubic, see SLOW_CASES'),
     ('ebooks/conversion/preprocess.py', 'HTMLPreProcessor.__call__', 'stacked'): (2, 'line 521, 524: accent repair and <br>\\s*<br> rules around \\s*'),
     ('ebooks/conversion/preprocess.py', 'accent_regex', 'stacked'): (2, 'line 360: accent \\s*(?:<br[^>]*>){0,1}\\s*accent, not slow on the accent_spaces input'),
     ('ebooks/conversion/preprocess.py', 'book_designer_rules', 'nested'): (2, 'line 433, 437: (align=)*(?(1)(\\w+))* between lazy [^><]*?'),
@@ -1130,8 +1123,37 @@ def main():
     print(f'{total} offending patterns in {len(offenders)} places')
 
 
+# The results of the rewritten patterns, as given by the patterns they replaced. The rewrites find the same matches (they
+# were compared with the originals on tens of thousands of generated documents), this keeps the cases where that is
+# easy to get wrong: a word that is too close to the start of the line to satisfy the lookbehind is matched from the
+# first letter that does, and words inside tags are left alone.
+DEHYPHENATOR_CASES = (
+    ('html', 'hello wor-</span></p>\n<p>ld and world', 3, 'hello world and world'),
+    ('html', 'ab-\n</i><p>cd, abcd', 10, 'ab-\n</i><p>cd, abcd'),
+    ('html', 'xx-</p>\n<p>yy and some more text-</i> <b>words and wordsmore', 2, 'xx-</p>\n<p>yy and some more text-words and wordsmore'),
+    ('txt', 'abcdefghij ab-\n  cdefgh abcdefgh', 4, 'abcdefghij abcdefgh abcdefgh'),
+    ('txt', 'ab-\ncdef abcdef', 0, 'abcdef abcdef'),
+    ('txt', 'ab-\ncdef abcdef', 12, 'ab-\ncdef abcdef'),
+    ('pdf', 'a long line of text hyper-<p>link and hyperlink', 3, 'a long line of text hyperlink and hyperlink'),
+    ('individual_words', 'a <span title="co-operate">co-\noperate</span> cooperate co- operate', 0, 'a <span title="co-operate">cooperate</span> cooperate cooperate'),
+    ('individual_words', 'some-thing something <a href="so-me">x</a> no-thing nothing', 0, 'something something <a href="so-me">x</a> nothing nothing'),
+    ('html_cleanup', 'ab-</span></i><i><span>cd abcd', 0, 'abcd abcd'),
+    ('txt_cleanup', 'ab- cd abcd ef-\ngh efgh', 0, 'abcd abcd efgh efgh'),
+)  # fmt: skip
+
+
+class RewrittenPatternsTest(unittest.TestCase):
+    def test_dehyphenator(self):
+        from calibre.ebooks.conversion.preprocess import Dehyphenator
+
+        for fmt, text, length, expected in DEHYPHENATOR_CASES:
+            with self.subTest(fmt=fmt, text=text, length=length):
+                self.assertEqual(Dehyphenator(0, QuietLog())(text, fmt, length), expected)
+
+
 def find_tests():
     ans = unittest.defaultTestLoader.loadTestsFromTestCase(LintTest)
+    ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(RewrittenPatternsTest))
     ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TimingTest))
     ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(RealisticBookTest))
     return ans

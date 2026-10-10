@@ -17,7 +17,7 @@ import unittest
 from io import BytesIO
 
 from calibre.db.tests.base import IMG
-from calibre.db.tests.fault_injection import A, B, C, D, TABLE_PATH, Case, FaultInjectionTest, add_case_tests, known_table, write_table
+from calibre.db.tests.fault_injection import A, B, C, D, INJECTED, TABLE_PATH, Case, FaultInjectionTest, add_case_tests, known_table, write_table
 
 _tc = unittest.TestCase()
 eq, true, false = _tc.assertEqual, _tc.assertTrue, _tc.assertFalse
@@ -743,11 +743,6 @@ CASES = (
 # the case, the kinds of problems (see BaseTest.find_library_inconsistencies(), lost-file is data loss) and
 # the faults after which they are found. The fault ids are described in fault_injection.py
 KNOWN_INCONSISTENT = known_table(
-    # DATA LOSS: the existing file is truncated (opened for writing) before the new contents are read, so a failure to read them destroys the old
-    # contents
-    ('add_extra_files_replace_unreadable', {'lost-file'}, (
-        'self',
-    )),
     # The in-memory formats are updated before the row of the data table is written, and the composite cache is cleared by update_last_modified(),
     # which is last
     ('add_format_new', {'field:formats', 'format-file-missing', 'formats'}, (
@@ -759,10 +754,6 @@ KNOWN_INCONSISTENT = known_table(
     # The file was replaced, but its new size was not recorded
     ('add_format_replace', {'format-size'}, (
         'file:backend.add_format@1/after',
-    )),
-    # DATA LOSS: as for extra files, the existing format file is truncated before the new contents are read
-    ('add_format_replace_unreadable', {'format-size', 'lost-file'}, (
-        'self',
     )),
     # The row of the book is inserted (and committed) before the metadata is set, if that fails the cache never learns of the book
     ('create_book_entry', {'ids'}, (
@@ -807,12 +798,7 @@ KNOWN_INCONSISTENT = known_table(
     ('move_book_from_trash', {'composite-cache', 'field:formats', 'format-file-missing', 'formats', 'stray-cover'}, (
         'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
     )),
-    # update_last_modified() is never called, so the cached composite columns that use formats are stale even when it works. And in-memory formats
-    # are updated before the row of the data table is written
-    ('move_format_from_trash', {'composite-cache'}, (
-        'normal',
-        'file:rmtree_with_retry@1',
-    )),
+    # The in-memory formats are updated before the row of the data table is written
     ('move_format_from_trash', {'field:formats', 'format-file-missing', 'formats'}, (
         'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
     )),
@@ -986,12 +972,9 @@ KNOWN_INCONSISTENT = known_table(
         'file:backend.set_cover@2',
         'sql:update books set has_cover=? where id=?@1',
     )),
-    # The in-memory tables are updated before the SQL statements are executed. The normal case is a bug: the series index is kept in memory when
-    # the series changes, but the database resets it to 1.0 (see custom_series_index() in write.py)
+    # The in-memory tables are updated before the SQL statements are executed
     ('set_field_custom_series', {'field:#series_index'}, (
-        'normal',
-        'sql:delete from custom_column_4 where id=?@1',
-        'sql:update books set last_modified=? where id=?@1',
+        'sql:update books_custom_column_4_link set extra=? where book=? and value=?@1',
     )),
     ('set_field_custom_series', {'field:#series'}, (
         'sql:delete from books_custom_column_4_link where book=?;@1',
@@ -1044,19 +1027,7 @@ KNOWN_INCONSISTENT = known_table(
     ('set_link_map', {'items:tags'}, (
         'sql:update tags set link=? where id=?@1',
     )),
-    # All the fields are set inside a transaction that is rolled back, with the in-memory tables reloaded, when something fails. But the files of
-    # the note of a tag that is no longer used (backup, resources) are removed as it is retired, and these are not restored by the rollback
-    ('set_metadata_fields', {'note-backup-missing'}, (
-        'file:notes.retire_entry@1/after',
-        'file:notes.remove_with_retry@1',
-    )),
-    ('set_metadata_fields', {'note-backup-missing', 'note-resource-missing'}, (
-        'file:notes.remove_with_retry@2',
-        'sql:delete from tags where id=?@1',
-        'sql:insert or replace into comments(book,text) values (?,?)@1',
-    )),
-    # The title and authors are set, and the folder moved, before the other fields. The note of a tag that is no longer used is lost as for
-    # set_metadata_fields
+    # The title and authors are set, and the folder moved, before the other fields
     ('set_metadata_rename', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
         'file:copy_tree@1/after',
     )),
@@ -1064,13 +1035,6 @@ KNOWN_INCONSISTENT = known_table(
         'file:copier.copy_all@1',
         'file:copier.delete_sources@1',
         'file:remove_dir_if_empty@1',
-    )),
-    ('set_metadata_rename', {'note-backup-missing'}, (
-        'file:notes.retire_entry@1/after',
-        'file:notes.remove_with_retry@1',
-    )),
-    ('set_metadata_rename', {'note-backup-missing', 'note-resource-missing'}, (
-        'file:notes.remove_with_retry@2',
     )),
     # The note is written in several steps that are not in a transaction, the backup file is written last
     ('set_notes_new', {'note-backup-missing'}, (
@@ -1119,10 +1083,6 @@ KNOWN_INCONSISTENT = known_table(
     ('update_path', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
     )),
-    # DATA LOSS: with delete_first the old data of the plugin is deleted and committed before the new data is inserted, so a failure of the insert loses the old data
-    ('add_custom_book_data', {'not-atomic'}, (
-        'sql:insert or replace into books_plugin_data (book, name, val) values (?, ?, ?)@1',
-    )),
     # The saved searches are stored in the preferences. The in-memory copy is changed before the preference is written
     ('saved_search_delete', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',
@@ -1142,6 +1102,50 @@ class WriteConsistencyTest(FaultInjectionTest):
     def tearDownClass(cls):
         if TABLE_PATH:
             write_table(FaultInjectionTest.results, TABLE_PATH)
+
+    def test_create_custom_column_is_atomic(self):
+        "A custom column whose creation fails is not left half created"
+        from calibre.db.tests.fault_injection import template_library
+
+        def tables_of_columns(cache):
+            return sorted(x for (x,) in cache.backend.execute("SELECT name FROM sqlite_master WHERE name LIKE '%custom_column_%'"))
+
+        def fail_on_script(cache):
+            orig = cache.backend.execute
+
+            def execute(sql, *a, **kw):
+                if 'CREATE TABLE' in sql:
+                    raise OSError(INJECTED)
+                return orig(sql, *a, **kw)
+
+            cache.backend.execute = execute
+            return lambda: cache.backend.__dict__.pop('execute')
+
+        def fail_on_prefs(cache):
+            def set_pref(*a, **kw):
+                raise OSError(INJECTED)
+
+            cache.backend.prefs.set = set_pref
+            return lambda: cache.backend.prefs.__dict__.pop('set')
+
+        for name, inject in (('the tables', fail_on_script), ('the preference', fail_on_prefs)):
+            with self.subTest(failure_in=name):
+                cache = self.init_cache(self.clone_library(template_library(self)))
+                before = tables_of_columns(cache)
+                restore = inject(cache)
+                try:
+                    self.assertRaises(OSError, cache.create_custom_column, 'wc', 'WC column', 'text', False)
+                finally:
+                    restore()
+                eq(tables_of_columns(cache), before)
+                cache.close()
+                self.objects_to_close.remove(cache)
+                cache = self.init_cache(cache.backend.library_path)
+                false('#wc' in custom_column_names(cache))
+                eq(tables_of_columns(cache), before)
+                # and creating it works afterwards
+                cache.create_custom_column('wc', 'WC column', 'text', False)
+                self.assertTrue(len(tables_of_columns(cache)) > len(before))
 
     def test_template_library(self):
         "The library on which the cases operate is consistent"

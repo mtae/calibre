@@ -743,23 +743,11 @@ CASES = (
 # the case, the kinds of problems (see BaseTest.find_library_inconsistencies(), lost-file is data loss) and
 # the faults after which they are found. The fault ids are described in fault_injection.py
 KNOWN_INCONSISTENT = known_table(
-    # The row of the book is inserted (and committed) before the metadata is set, if that fails the cache never learns of the book
-    ('create_book_entry', {'ids'}, (
-        'sql:update books set title=? where id=?@1',
-        'sql:insert into authors(name,sort) values (?,?)@1',
-        'sql:update books set path=? where id=?@1',
-    )),
     # The note was written to the database but not its backup file
     ('import_note', {'note-backup-missing'}, (
         'file:notes.set_backup_for@1',
     )),
-    # As for create_book_entry, which it calls: the row is in the database but unknown to the cache, so the book cannot be restored again from the
-    # trash, and a stray cover.jpg
-    ('move_book_from_trash', {'ids'}, (
-        'sql:update books set title=? where id=?@1',
-        'sql:insert into authors(name,sort) values (?,?)@1',
-        'sql:update books set path=? where id=?@1',
-    )),
+    # A stray cover.jpg is left
     ('move_book_from_trash', {'stray-cover'}, (
         'file:copy_tree@1/after',
         'file:copier.delete_sources@1',

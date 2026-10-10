@@ -21,6 +21,8 @@ IMG = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xe1\x
 class BaseTest(unittest.TestCase):
     longMessage = True
     maxDiff = None
+    # Test classes that have very many tests can turn this off, a full collection is slow
+    collect_garbage_after_test = True
 
     def setUp(self):
         from calibre.utils.recycle_bin import nuke_recycle
@@ -38,7 +40,8 @@ class BaseTest(unittest.TestCase):
         for x in self.objects_to_close:
             x.close()
         self.objects_to_close = []
-        gc.collect(), gc.collect()
+        if self.collect_garbage_after_test:
+            gc.collect(), gc.collect()
         for x in self.paths_to_remove:
             try:
                 shutil.rmtree(x)

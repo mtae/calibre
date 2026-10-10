@@ -108,6 +108,17 @@ def sql_field(name, value, expected=None):
     )
 
 
+def stale_format_size(cache):
+    "Make the recorded size of a format wrong, as if the file was changed behind the back of calibre"
+    cache.backend.execute('UPDATE data SET uncompressed_size=1 WHERE book=? AND format=?', (A, 'FMT1'))
+    cache.refresh_format_cache()
+
+
+def custom_column_names(cache):
+    "The custom columns as they are in the database"
+    return {'#' + label: name for label, name in cache.backend.execute('SELECT label,name FROM custom_columns')}
+
+
 def make_annotations():
     return [({'type': 'bookmark', 'title': 'a bookmark', 'pos': 'epubcfi(/2)', 'timestamp': '2026-01-01T00:00:00+00:00'}, 1767225600.0)]
 
@@ -550,6 +561,178 @@ CASES = (
         state=annotation_titles,
     ),
     # }}}
+    # More tables that are only written by SQL {{{
+    Case(
+        'add_custom_book_data',
+        'add_custom_book_data',
+        'sql',
+        lambda c: c.add_custom_book_data('write_consistency', {A: 'a', B: 'b'}, delete_first=True),
+        lambda c: eq(c.get_custom_book_data('write_consistency'), {A: 'a', B: 'b'}),
+        setup=lambda c: c.add_custom_book_data('write_consistency', {C: 'old'}),
+        state=lambda c: c.get_custom_book_data('write_consistency'),
+    ),
+    Case(
+        'delete_custom_book_data',
+        'delete_custom_book_data',
+        'sql',
+        lambda c: c.delete_custom_book_data('write_consistency', [A]),
+        lambda c: eq(c.get_custom_book_data('write_consistency'), {B: 'b'}),
+        setup=lambda c: c.add_custom_book_data('write_consistency', {A: 'a', B: 'b'}),
+    ),
+    Case(
+        'delete_conversion_options',
+        'delete_conversion_options',
+        'sql',
+        lambda c: c.delete_conversion_options([A, B]),
+        lambda c: false(any(c.has_conversion_options([A, B]).values()) if isinstance(c.has_conversion_options([A, B]), dict) else c.has_conversion_options([A, B])),
+        setup=lambda c: c.set_conversion_options({A: {'a': 1}, B: {'b': 2}}),
+    ),
+    Case(
+        'saved_search_rename',
+        'saved_search_rename',
+        'sql',
+        lambda c: c.saved_search_rename('my search', 'renamed search'),
+        lambda c: eq(c.saved_search_lookup('renamed search'), 'tags:t1'),
+        setup=lambda c: c.saved_search_add('my search', 'tags:t1'),
+    ),
+    Case(
+        'saved_search_delete',
+        'saved_search_delete',
+        'sql',
+        lambda c: c.saved_search_delete('my search'),
+        lambda c: eq(({'my search', 'other search'} & set(c.saved_search_names())), {'other search'}),
+        setup=lambda c: (c.saved_search_add('my search', 'tags:t1'), c.saved_search_add('other search', 'tags:t2')),
+    ),
+    Case(
+        'saved_search_set_all',
+        'saved_search_set_all',
+        'sql',
+        lambda c: c.saved_search_set_all({'s1': 'tags:t1', 's2': 'tags:t2'}),
+        lambda c: eq({'s1', 's2', 'my search'} & set(c.saved_search_names()), {'s1', 's2'}),
+        setup=lambda c: c.saved_search_add('my search', 'tags:t1'),
+    ),
+    Case(
+        'update_last_modified',
+        'update_last_modified',
+        'sql',
+        lambda c: c.update_last_modified({A, B}),
+        lambda c: true(c.field_for('last_modified', A) > c.field_for('timestamp', A)),
+    ),
+    Case(
+        'refresh_format_sizes',
+        'refresh_format_sizes',
+        'sql',
+        lambda c: c.refresh_format_sizes({(A, 'FMT1'): len(c.format(A, 'FMT1'))}),
+        lambda c: eq(c.format_metadata(A, 'FMT1')['size'], len(c.format(A, 'FMT1'))),
+        setup=stale_format_size,
+    ),
+    Case(
+        'clear_dirtied',
+        'clear_dirtied',
+        'sql',
+        lambda c: c.clear_dirtied(A, None),
+        lambda c: false(A in c.dirtied_cache),
+        setup=lambda c: c.mark_as_dirty({A, B}),
+    ),
+    Case(
+        'commit_dirty_cache',
+        'commit_dirty_cache',
+        'sql',
+        lambda c: c.commit_dirty_cache(),
+        lambda c: true({A, B} <= set(c.dirtied_cache)),
+        setup=lambda c: c.mark_as_dirty({A, B}),
+    ),
+    Case(
+        'update_annotations',
+        'update_annotations',
+        'sql',
+        lambda c: c.update_annotations({a['id']: dict(a['annotation'], title='updated') for a in c.all_annotations(restrict_to_book_ids={A})}),
+        lambda c: eq(annotation_titles(c), ['updated']),
+        setup=old_annotations,
+        state=annotation_titles,
+    ),
+    Case(
+        'delete_annotations',
+        'delete_annotations',
+        'sql',
+        lambda c: c.delete_annotations([a['id'] for a in c.all_annotations(restrict_to_book_ids={A})]),
+        lambda c: eq(len(c.all_annotations(restrict_to_book_ids={A}, ignore_removed=True)), 0),
+        setup=old_annotations,
+    ),
+    Case(
+        'merge_annotations_for_book',
+        'merge_annotations_for_book',
+        'sql',
+        lambda c: c.merge_annotations_for_book(
+            A, 'FMT1', [{'type': 'bookmark', 'title': 'merged bookmark', 'pos': 'epubcfi(/6)', 'timestamp': '2026-02-01T00:00:00+00:00'}]
+        ),
+        lambda c: eq(annotation_titles(c), ['a bookmark', 'merged bookmark']),
+        setup=old_annotations,
+        state=annotation_titles,
+    ),
+    Case(
+        'restore_annotations',
+        'restore_annotations',
+        'sql',
+        lambda c: c.restore_annotations(
+            B,
+            [
+                {
+                    'user_type': 'local',
+                    'user': 'viewer',
+                    'format': 'FMT1',
+                    'annotation': {'type': 'bookmark', 'title': 'restored', 'pos': 'epubcfi(/8)', 'timestamp': '2026-03-01T00:00:00+00:00'},
+                }
+            ],
+        ),
+        lambda c: eq([x['annotation']['title'] for x in c.all_annotations_for_book(B)], ['restored']),
+    ),
+    # Changes of the custom columns only take effect when the library is opened again, so the live cache is not compared with a fresh one
+    Case(
+        'set_custom_column_metadata',
+        'set_custom_column_metadata',
+        'sql',
+        lambda c: c.set_custom_column_metadata(c.field_metadata['#tags']['colnum'], name='Renamed custom tags'),
+        lambda c: eq(custom_column_names(c)['#tags'], 'Renamed custom tags'),
+        ignore=('field:*', 'items:*', 'prefs'),
+        state=custom_column_names,
+    ),
+    Case(
+        'create_custom_column',
+        'create_custom_column',
+        'sql',
+        lambda c: c.create_custom_column('wc', 'WC column', 'text', False),
+        lambda c: eq(custom_column_names(c)['#wc'], 'WC column'),
+        ignore=('field:*', 'items:*', 'prefs'),
+        state=custom_column_names,
+    ),
+    Case(
+        'delete_custom_column',
+        'delete_custom_column',
+        'sql',
+        lambda c: c.delete_custom_column(num=c.field_metadata['#tags']['colnum']),
+        lambda c: false('#tags' in custom_column_names(c)),
+        ignore=('field:*', 'items:*', 'prefs'),
+        state=custom_column_names,
+    ),
+    # }}}
+    # More operations that use the file system {{{
+    Case(
+        'save_original_format',
+        'save_original_format',
+        'sql+files',
+        lambda c: c.save_original_format(A, 'FMT1'),
+        lambda c: has_format(c, A, 'ORIGINAL_FMT1', c.format(A, 'FMT1')),
+        faults=('file',),
+    ),
+    Case(
+        'write_backup',
+        'write_backup',
+        'files',
+        lambda c: c.write_backup(A, b'<package/>'),
+        lambda c: eq(open(os.path.join(c.backend.library_path, folder_name(c, A), 'metadata.opf'), 'rb').read(), b'<package/>'),
+    ),
+    # }}}
     # Writing the backup of the metadata {{{
     Case('dump_metadata', 'dump_metadata', 'files', lambda c: c.dump_metadata([A]), lambda c: true(os.path.exists(os.path.join(c.backend.library_path, folder_name(c, A), 'metadata.opf')))),
     # }}}
@@ -935,6 +1118,17 @@ KNOWN_INCONSISTENT = known_table(
     )),
     ('update_path', {'composite-cache', 'field:path', 'format-file-missing'}, (
         'sql:update books set path=? where id=?@1',
+    )),
+    # DATA LOSS: with delete_first the old data of the plugin is deleted and committed before the new data is inserted, so a failure of the insert loses the old data
+    ('add_custom_book_data', {'not-atomic'}, (
+        'sql:insert or replace into books_plugin_data (book, name, val) values (?, ?, ?)@1',
+    )),
+    # The saved searches are stored in the preferences. The in-memory copy is changed before the preference is written
+    ('saved_search_delete', {'prefs'}, (
+        'sql:update preferences set val=? where id=?@1',
+    )),
+    ('saved_search_rename', {'prefs'}, (
+        'sql:update preferences set val=? where id=?@1',
     )),
 )
 

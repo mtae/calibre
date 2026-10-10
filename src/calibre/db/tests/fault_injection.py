@@ -54,6 +54,7 @@ from typing import Any
 
 import apsw
 
+from calibre.constants import iswindows
 from calibre.db.tests.base import IMG, BaseTest
 
 # Ids of the books of the library built by build_template()
@@ -409,6 +410,8 @@ class Case:
         of other methods that have their own case
     :param sql_last: Also inject a failure of the last execution of every SQL statement, see :meth:`Hooks.candidate_faults`
     :param skip: fnmatch patterns of the ids of faults that are not injected, because they are the same as others
+    :param ignore: fnmatch patterns of the kinds of problems that are not reported, for operations that only take effect when
+        the library is opened again, such as changes of the custom columns, so the live cache is expected to differ from a fresh one
     :param self_failing: The operation fails by itself, no faults are injected and it must raise
     """
 
@@ -424,6 +427,7 @@ class Case:
     faults: tuple = ('file', 'sql')
     skip: tuple = ()
     sql_last: bool = False
+    ignore: tuple = ()
     note: str = ''
 
 
@@ -473,6 +477,7 @@ def check(test, cache, before, case):
         problems = test.find_library_inconsistencies(cache)
     except Exception as err:
         problems = [('check-error', f'The consistency check failed: {err!r}')]
+    problems = [(kind, msg) for kind, msg in problems if not any(fnmatch.fnmatchcase(kind, p) for p in case.ignore)]
     try:
         lost = lost_files(before, snapshot(cache), case.lost)
     except Exception as err:
@@ -557,6 +562,8 @@ class FaultInjectionTest(BaseTest):
 
     CASES: tuple[Case, ...] = ()
     KNOWN_INCONSISTENT: dict[tuple[str, str], tuple[frozenset, str]] = {}
+    # Every case closes the caches that it opens. Other platforms need this for deleting files that are in use
+    collect_garbage_after_test = iswindows
 
     def setUp(self):
         from calibre.utils.recycle_bin import nuke_recycle

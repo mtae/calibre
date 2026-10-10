@@ -942,9 +942,8 @@ class CacheRecomputeTest(BaseTest):
         self.assert_same_as_fresh(cache, 'search', 'series:true')
         self.assert_same_as_fresh(cache, 'search', '#series:true')
 
-    @unittest.expectedFailure
     def test_stale_composite_of_virtual_libraries(self):
-        "A composite column showing the Virtual libraries of a book is stale after the book changes Virtual library"
+        "A composite column showing the Virtual libraries of a book is up to date after the book changes Virtual library"
         cache = self.cache_with_composites(cvl='{virtual_libraries}')
         cache.set_pref('virtual_libraries', {'VL Rated': 'rating:>=4', 'VL Tagged': 'tags:true'})
         # The composite is rendered, so the Virtual libraries are computed, while a cached search uses it
@@ -953,8 +952,8 @@ class CacheRecomputeTest(BaseTest):
             cache.field_for('#cvl', book_id)
         cache.set_field('rating', {2: 10})
         self.assertEqual('VL Rated, VL Tagged', self.fresh(cache).field_for('#cvl', 2))
-        # Suspected cause: clear_search_caches() (cache.py ~324) updates the cached searches, which
-        # renders composite columns for the changed books, before it discards vls_for_books_cache
+        # Was: clear_search_caches() updated the cached searches, which renders composite columns for
+        # the changed books, before it discarded vls_for_books_cache
         self.assert_same_as_fresh(cache, 'field_for', '#cvl', 2)
 
     def test_stale_search_after_saved_search_add(self):

@@ -743,18 +743,6 @@ CASES = (
 # the case, the kinds of problems (see BaseTest.find_library_inconsistencies(), lost-file is data loss) and
 # the faults after which they are found. The fault ids are described in fault_injection.py
 KNOWN_INCONSISTENT = known_table(
-    # The in-memory formats are updated before the row of the data table is written, and the composite cache is cleared by update_last_modified(),
-    # which is last
-    ('add_format_new', {'field:formats', 'format-file-missing', 'formats'}, (
-        'sql:insert or replace into data (book,format,uncompressed_size,name) values (?,?,?,?)@1',
-    )),
-    ('add_format_new', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The file was replaced, but its new size was not recorded
-    ('add_format_replace', {'format-size'}, (
-        'file:backend.add_format@1/after',
-    )),
     # The row of the book is inserted (and committed) before the metadata is set, if that fails the cache never learns of the book
     ('create_book_entry', {'ids'}, (
         'sql:update books set title=? where id=?@1',
@@ -814,27 +802,6 @@ KNOWN_INCONSISTENT = known_table(
         'file:notes.remove_with_retry@1',
         'file:notes.remove_with_retry@2',
         'sql:delete from tags where id=?@1',
-    )),
-    # The format files are moved to the trash before the rows are deleted from the data table, so a failure leaves rows without files
-    ('remove_formats', {'composite-cache', 'format-file-missing'}, (
-        'file:atomic_write@2',
-        'file:copy_files@1/after',
-        'file:copy_files@2',
-        'file:copier.copy_all@2',
-        'file:copier.delete_sources@2',
-    )),
-    ('remove_formats', {'composite-cache', 'field:formats', 'formats'}, (
-        'sql:delete from data where book=? and format=?@1',
-    )),
-    ('remove_formats', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
-    )),
-    # The in-memory formats are updated before the rows are deleted
-    ('remove_formats_db_only', {'field:formats', 'formats'}, (
-        'sql:delete from data where book=? and format=?@1',
-    )),
-    ('remove_formats_db_only', {'composite-cache'}, (
-        'sql:update books set last_modified=? where id=?@1',
     )),
     # The in-memory tables are updated before the SQL statements are executed
     ('remove_items_custom', {'field:#tags', 'items:#tags'}, (
@@ -914,15 +881,12 @@ KNOWN_INCONSISTENT = known_table(
     ('rename_items_tags_merge', {'composite-cache'}, (
         'sql:update books set last_modified=? where id=?@1',
     )),
-    # Moves the original over the format, then deletes the original with remove_formats(), the order of the steps leaves the sizes or rows of the
-    # data table wrong
-    ('restore_original_format', {'format-size'}, (
-        'file:backend.add_format@1/after',
-    )),
+    # Moves the original over the format (not yet deferred, it is a method for D2), then deletes the original with remove_formats(). The
+    # add_format() and remove_formats() steps are units of work, if the second fails the original file is already moved
     ('restore_original_format', {'composite-cache', 'format-file-missing', 'format-size'}, (
         'file:atomic_rename@1/after',
     )),
-    ('restore_original_format', {'field:formats', 'formats'}, (
+    ('restore_original_format', {'format-file-missing'}, (
         'sql:delete from data where book=? and format=?@1',
     )),
     # The saved search is stored in memory before it is written to the preferences

@@ -22,12 +22,12 @@ from calibre.constants import __version__, filesystem_encoding
 from calibre.ebooks.chardet import xml_to_unicode
 from calibre.ebooks.conversion.preprocess import CSSPreProcessor
 from calibre.ebooks.oeb.parse_utils import XHTML, XHTML_NS, NotHTML, barename, namespace, parse_html
+from calibre.ebooks.oeb.reproducible import short_uuid4
 from calibre.translations.dynamic import translate
 from calibre.utils.cleantext import clean_xml_chars
 from calibre.utils.icu import numeric_sort_key
 from calibre.utils.icu import title_case as icu_title
 from calibre.utils.localization import _, __, is_rtl_lang
-from calibre.utils.short_uuid import uuid4
 from calibre.utils.xml_parse import safe_xml_fromstring
 from polyglot.urllib import unquote as urlunquote
 
@@ -235,7 +235,7 @@ def close_self_closing_tags(raw):
 
 
 def uuid_id():
-    return 'u' + uuid4()
+    return 'u' + short_uuid4()
 
 
 def itercsslinks(raw):
@@ -1005,8 +1005,10 @@ class Manifest:
     attributes associated with those files, including their internal paths,
     unique identifiers, and MIME types.
 
-    Itself acts as a :class:`set` of manifest items, and provides the following
-    instance data member for dictionary-like access:
+    Itself acts as a collection of manifest items that iterates in the order
+    the items were added (not in set order, which depends on object addresses
+    and would make conversion output differ from run to run), and provides the
+    following instance data member for dictionary-like access:
 
     :attr:`ids`: A dictionary in which the keys are the unique identifiers of
         the manifest items and the values are the items themselves.
@@ -1278,9 +1280,29 @@ class Manifest:
             href = os.path.normpath(href).replace('\\', '/')
             return href
 
+    class Items(dict):
+        """A set of manifest items that remembers insertion order.
+
+        Manifest items hash by identity, so a plain set iterates in an order
+        that depends on memory addresses and changes from run to run. That
+        order leaked into the output (e.g. the numbering of image records in
+        MOBI files). Keys such as href or id are not usable for ordering as
+        transforms rename items while the book is being converted, insertion
+        order is stable.
+        """
+
+        def add(self, item):
+            self[item] = None
+
+        def discard(self, item):
+            self.pop(item, None)
+
+        def remove(self, item):
+            del self[item]
+
     def __init__(self, oeb):
         self.oeb = oeb
-        self.items = set()
+        self.items = self.Items()
         self.ids = {}
         self.hrefs = {}
 

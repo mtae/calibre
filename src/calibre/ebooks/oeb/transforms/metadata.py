@@ -5,7 +5,8 @@ import os
 import re
 
 from calibre import guess_type
-from calibre.utils.date import isoformat, now
+from calibre.ebooks.oeb.reproducible import datetime_now
+from calibre.utils.date import isoformat
 
 
 def meta_info_to_oeb_metadata(mi, m, log, override_input_metadata=False):
@@ -95,7 +96,7 @@ def meta_info_to_oeb_metadata(mi, m, log, override_input_metadata=False):
         m.add('publication_type', mi.publication_type)
 
     if not m.timestamp:
-        m.add('timestamp', isoformat(now()))
+        m.add('timestamp', isoformat(datetime_now()))
 
 
 class MergeMetadata:

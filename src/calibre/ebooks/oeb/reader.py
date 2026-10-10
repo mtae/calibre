@@ -9,7 +9,6 @@ import io
 import os
 import re
 import sys
-import uuid
 from collections import defaultdict
 from typing import cast
 from urllib.parse import urldefrag, urlparse
@@ -48,6 +47,7 @@ from calibre.ebooks.oeb.base import (
     xml2text,
     xpath,
 )
+from calibre.ebooks.oeb.reproducible import uuid4
 from calibre.ebooks.oeb.writer import OEBWriter
 from calibre.ptempfile import TemporaryDirectory
 from calibre.utils.cleantext import clean_xml_chars
@@ -169,7 +169,7 @@ class OEBReader:
             mi.book_producer = '{a} ({v}) [http://{a}-ebook.com]'.format(**dict(a=__appname__, v=__version__))
         meta_info_to_oeb_metadata(mi, self.oeb.metadata, self.logger)
         m = self.oeb.metadata
-        m.add('identifier', str(uuid.uuid4()), id='uuid_id', scheme='uuid')
+        m.add('identifier', str(uuid4()), id='uuid_id', scheme='uuid')
         self.oeb.uid = self.oeb.metadata.identifier[-1]
         if not m.title:
             m.add('title', self.oeb.translate(__('Unknown')))

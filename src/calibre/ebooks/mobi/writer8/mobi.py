@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2012, Kovid Goyal <kovid@kovidgoyal.net>
 
-import random
-import time
 from struct import pack
 
 from calibre.ebooks.mobi.langcodes import iana2mobi
@@ -10,6 +8,7 @@ from calibre.ebooks.mobi.utils import RECORD_SIZE, utf8_text
 from calibre.ebooks.mobi.writer2 import PALMDOC, UNCOMPRESSED
 from calibre.ebooks.mobi.writer8.exth import build_exth
 from calibre.ebooks.mobi.writer8.header import Header
+from calibre.ebooks.oeb.reproducible import epoch_seconds, random_uint32
 from calibre.utils.filenames import ascii_filename
 
 NULL_INDEX = 0xFFFFFFFF
@@ -299,7 +298,7 @@ class KF8Book:
         self.extra_data_flags = 0b1
         if writer.has_tbs:
             self.extra_data_flags |= 0b10
-        self.uid = random.randint(0, 0xFFFFFFFF)
+        self.uid = random_uint32()
 
         self.language_code = iana2mobi(str(metadata.language[0]))
         self.exth_flags = 0b1010000
@@ -349,7 +348,7 @@ class KF8Book:
                 title = title.encode('ascii')
             title = title[:31]
             title += b'\0' * (32 - len(title))
-            now = int(time.time())
+            now = epoch_seconds()
             nrecords = len(records)
             f.write(title)
             f.write(pack(b'>HHIIIIII', 0, 0, now, now, 0, 0, 0, 0))

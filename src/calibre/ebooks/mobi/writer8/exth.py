@@ -111,7 +111,7 @@ def build_exth(
             uuid = str(x).split(':')[-1]
             break
     if uuid is None:
-        from uuid import uuid4
+        from calibre.ebooks.oeb.reproducible import uuid4
 
         uuid = str(uuid4())
 

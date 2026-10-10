@@ -2,7 +2,6 @@
 # License: GPLv3 Copyright: 2009, Kovid Goyal <kovid@kovidgoyal.net>
 
 import re
-import uuid
 from collections import Counter, OrderedDict
 from urllib.parse import urlparse
 
@@ -10,6 +9,7 @@ from lxml import etree
 
 from calibre.ebooks import ConversionError
 from calibre.ebooks.oeb.base import TOC, XHTML, XPNSMAP, barename, xml2text
+from calibre.ebooks.oeb.reproducible import uuid4
 from calibre.utils.localization import _
 
 
@@ -112,7 +112,7 @@ class DetectStructure:
                 elem = matches[0]
                 eid = elem.get('id', None)
                 if not eid:
-                    eid = 'start_reading_at_' + str(uuid.uuid4()).replace('-', '')
+                    eid = 'start_reading_at_' + str(uuid4()).replace('-', '')
                     elem.set('id', eid)
                 if 'text' in self.oeb.guide:
                     self.oeb.guide.remove('text')

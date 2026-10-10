@@ -17,7 +17,7 @@ import unittest
 from io import BytesIO
 
 from calibre.db.tests.base import IMG
-from calibre.db.tests.fault_injection import A, B, C, D, TABLE_PATH, Case, FaultInjectionTest, add_case_tests, known_table, write_table
+from calibre.db.tests.fault_injection import A, B, C, D, INJECTED, TABLE_PATH, Case, FaultInjectionTest, add_case_tests, known_table, write_table
 
 _tc = unittest.TestCase()
 eq, true, false = _tc.assertEqual, _tc.assertTrue, _tc.assertFalse
@@ -1102,6 +1102,50 @@ class WriteConsistencyTest(FaultInjectionTest):
     def tearDownClass(cls):
         if TABLE_PATH:
             write_table(FaultInjectionTest.results, TABLE_PATH)
+
+    def test_create_custom_column_is_atomic(self):
+        "A custom column whose creation fails is not left half created"
+        from calibre.db.tests.fault_injection import template_library
+
+        def tables_of_columns(cache):
+            return sorted(x for (x,) in cache.backend.execute("SELECT name FROM sqlite_master WHERE name LIKE '%custom_column_%'"))
+
+        def fail_on_script(cache):
+            orig = cache.backend.execute
+
+            def execute(sql, *a, **kw):
+                if 'CREATE TABLE' in sql:
+                    raise OSError(INJECTED)
+                return orig(sql, *a, **kw)
+
+            cache.backend.execute = execute
+            return lambda: cache.backend.__dict__.pop('execute')
+
+        def fail_on_prefs(cache):
+            def set_pref(*a, **kw):
+                raise OSError(INJECTED)
+
+            cache.backend.prefs.set = set_pref
+            return lambda: cache.backend.prefs.__dict__.pop('set')
+
+        for name, inject in (('the tables', fail_on_script), ('the preference', fail_on_prefs)):
+            with self.subTest(failure_in=name):
+                cache = self.init_cache(self.clone_library(template_library(self)))
+                before = tables_of_columns(cache)
+                restore = inject(cache)
+                try:
+                    self.assertRaises(OSError, cache.create_custom_column, 'wc', 'WC column', 'text', False)
+                finally:
+                    restore()
+                eq(tables_of_columns(cache), before)
+                cache.close()
+                self.objects_to_close.remove(cache)
+                cache = self.init_cache(cache.backend.library_path)
+                false('#wc' in custom_column_names(cache))
+                eq(tables_of_columns(cache), before)
+                # and creating it works afterwards
+                cache.create_custom_column('wc', 'WC column', 'text', False)
+                self.assertTrue(len(tables_of_columns(cache)) > len(before))
 
     def test_template_library(self):
         "The library on which the cases operate is consistent"

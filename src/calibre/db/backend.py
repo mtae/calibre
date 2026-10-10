@@ -1425,7 +1425,13 @@ class DB:
         # Note: the caller is responsible for scheduling a metadata backup if necessary
         return changed
 
-    def create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):  # {{{
+    def create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):
+        # The row of the custom_columns table, the tables, views and triggers of the column and the preference are created in one
+        # transaction, so that a failure cannot leave a column without its tables or tables without a column
+        with self.conn:
+            return self._create_custom_column(label, name, datatype, is_multiple, editable=editable, display=display)
+
+    def _create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):  # {{{
         import re
 
         if not label:

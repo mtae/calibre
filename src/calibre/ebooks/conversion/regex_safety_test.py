@@ -922,17 +922,6 @@ PASSING_CASES = (
 # move the case to PASSING_CASES then.
 SLOW_CASES = {
     # Exponential
-    ('HeuristicProcessor(chapter headings)', 'padded_line', 48):
-        'exponential, 0.2 s for n=16, 5.6 s for n=32: utils.py:1030 chapdetect3, the lookahead (?!([\\W]+\\s*)+) over whitespace',
-    ('HeuristicProcessor(chapter headings)', 'hash_run', 100):
-        'exponential, 1.5 s for n=50: utils.py:404 chapter heading patterns built from line_open/line_close, "[A-Z#]+(\\s|-){0,3}" repeated',
-    ('HeuristicProcessor(chapter headings)', 'long_chapter_title', 100):
-        'exponential, 2.2 s for n=50: utils.py:404, a heading followed by a long word',
-    ('HeuristicProcessor(all heuristics)', 'long_chapter_title', 100):
-        'exponential, 2.5 s for n=50: utils.py:404 (see above), reached from HeuristicProcessor.__call__',
-    ('HeuristicProcessor(chapter headings)', 'emphasized_padding', 400):
-        'about n**4, 0.5 s for n=128, 7.5 s for n=256: utils.py:404, whitespace inside several emphasis tags',
-    # Cubic
     ('Dehyphenator(html)', 'padded_closing_tags', 400):
         'cubic, 0.5 s for n=200, 5 s for n=400: preprocess.py:263, \\s*(?=<)(</span>)?\\s*(</[iubp]>\\s*){1,2} share whitespace',
     ('HTMLPreProcessor(pdftohtml)', 'padded_hyphen_between_tags', 400):
@@ -1046,14 +1035,10 @@ KNOWN_OFFENDERS = {
     ('ebooks/conversion/preprocess.py', 'book_designer_rules', 'nested'): (2, 'line 433, 437: (align=)*(?(1)(\\w+))* between lazy [^><]*?'),
     ('ebooks/conversion/preprocess.py', 'book_designer_rules', 'stacked'): (2, 'line 433, 437: [^><]*? followed by (align=)* and [^><]*?'),
     ('ebooks/conversion/preprocess.py', 'pdftohtml_rules', 'stacked'): (1, 'line 407: <br>\\s*(([*#=] *){3,})\\s*<br>: spaces shared by \\s* and the group, not slow on the br_star_run input'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.__call__', 'nested'): (1, 'line 1030: renumber_headings/chapter: (?!([\\W]+\\s*)+) lookahead'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.__call__', 'stacked'): (1, 'line 1030: renumber_headings/chapter: \\s* before \\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.chapter_head', 'stacked'): (1, 'line 56: ^\\s*(.*?)\\s*$, applied to one heading, not measured'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.cleanup_markup', 'stacked'): (2, 'line 579, 580: empty inline tag removal around \\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.detect_whitespace', 'stacked'): (4, 'line 646, 651, 656, 678: blanks_n_nopunct/blanks_between_paragraphs: (blank paragraphs\\s*){1,}\\s*'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.fix_nbsp_indents', 'stacked'): (1, 'line 559: (<span>\\s*)+ \\s* before the nbsp run'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_chapters', 'nested'): (53, 'line 404: chapter heading patterns: ([A-Z#]+(\\s|-){0,3}){1,5} and similar groups, 47 of them exponential or worse in the heading length'),
-    ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_chapters', 'stacked'): (53, 'line 404: chapter heading patterns: \\s* next to \\s* or \\d+ next to [\\d..]+'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_pre', 'stacked'): (1, 'line 540: .*?(?<=<pre>)(?P<text>.*?)</pre>: cubic in the number of unclosed <pre> tags, see SLOW_CASES'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.markup_user_break', 'stacked'): (1, 'line 768: .*?width(:|=)(?P<wnum>\\d+).*, applied to the scene break string the user typed, not to the book'),
     ('ebooks/conversion/utils.py', 'HeuristicProcessor.punctuation_unwrap', 'stacked'): (3, 'line 513-515: line joining: \\s* (style_close)? (\\s*</p>)? \\s*'),

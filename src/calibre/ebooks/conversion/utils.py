@@ -263,7 +263,24 @@ class HeuristicProcessor:
         n_lookahead_open = r'(?!\s*'
         n_lookahead_close = r')\s*'
 
-        default_title = r"(<[ibu][^>]*>)?\s{0,3}(?!Chapter)([\w\:\'’\"-]+\s{0,3}){1,5}?(</[ibu][^>]*>)?(?=<)"
+        # Whitespace repeats around the tags of the heading lines are possessive:
+        # each is followed by a < (or by whitespace that another repeat takes
+        # first), so giving whitespace back never produces a different match
+        # (the chap and title groups start and end at the same places), it only
+        # made the engine try every way of dividing a run of whitespace
+        # between neighbouring repeats.
+        def possessive_ws(pattern):
+            return pattern.replace(r'\s*', r'\s*+')
+
+        chapter_line_open = possessive_ws(chapter_line_open)
+        chapter_line_close = possessive_ws(chapter_line_close)
+        title_line_open = possessive_ws(title_line_open)
+        title_line_close = possessive_ws(title_line_close)
+        chapter_header_close = possessive_ws(chapter_header_close)
+        blank_lines = possessive_ws(blank_lines)
+        n_lookahead_close = possessive_ws(n_lookahead_close)
+
+        default_title = r"(<[ibu][^>]*>)?\s{0,3}(?!Chapter)([\w\:\'’\"-]++\s{0,3}+){1,5}?(</[ibu][^>]*>)?(?=<)"
         simple_title = r'(<[ibu][^>]*>)?\s{0,3}(?!(Chapter|\s+<)).{0,65}?(</[ibu][^>]*>)?(?=<)'
 
         analysis_result = []
@@ -272,7 +289,7 @@ class HeuristicProcessor:
             [
                 (
                     r"[^'\"]?(Introduction|Synopsis|Acknowledgements|Epilogue|CHAPTER|Kapitel|Volume\b|Prologue|Book\b|Part\b|Dedication|Preface)"
-                    r"\s*([\d\w-]+\:?\'?\s*){0,5}"
+                    r"\s*+([\d\w-]++\:?+\'?+\s*+){0,5}"
                 ),
                 True,
                 True,
@@ -283,7 +300,7 @@ class HeuristicProcessor:
             ],
             # Highest frequency headings which include titles
             [
-                r"[^'\"]?(CHAPTER|Kapitel)\s*([\dA-Z\-\'\"\?!#,]+\s*){0,7}\s*",
+                r"[^'\"]?(CHAPTER|Kapitel)\s*+([\dA-Z\-\'\"\?!#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -292,7 +309,10 @@ class HeuristicProcessor:
                 'chapter',
             ],
             [
-                r'<b[^>]*>\s*(<span[^>]*>)?\s*(?!([*#•=]+\s*)+)(\s*(?=[\d.\w#\-*\s]+<)([\d.\w#-*]+\s*){1,5}\s*)(?!\.)(</span>)?\s*</b>',
+                # (?!([*#•=]+\s*)+) was true when the next character is not one of *#•=, but the
+                # whitespace before it gives characters back, so it only ever failed when no whitespace
+                # came before it: (?!(?<!\s)([*#•=])) says that without the nested repeats.
+                r'<b[^>]*>\s*+(<span[^>]*>)?\s*+(?!(?<!\s)([*#•=]))(\s*+(?=[\d.\w#\-*\s]++<)([\d.\w#-*]++\s*+){1,5}\s*+)(?!\.)(</span>)?\s*+</b>',
                 True,
                 True,
                 True,
@@ -301,7 +321,7 @@ class HeuristicProcessor:
                 'emphasized',
             ],  # Emphasized lines
             [
-                r"[^'\"]?(\d+(\.|:))\s*([\w\-\'\"#,]+\s*){0,7}\s*",
+                r"[^'\"]?(\d++(\.|:))\s*+([\w\-\'\"#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -310,7 +330,7 @@ class HeuristicProcessor:
                 'numeric',
             ],  # Numeric Chapters
             [
-                r'([A-Z]\s+){3,}\s*([\d\w-]+\s*){0,3}\s*',
+                r'([A-Z]\s++){3,}\s*+([\d\w-]++\s*+){0,3}\s*+',
                 True,
                 True,
                 True,
@@ -319,7 +339,7 @@ class HeuristicProcessor:
                 'letter_spaced',
             ],  # Spaced Lettering
             [
-                r"[^'\"]?(\d+\.?\s+([\d\w-]+\:?\'?-?\s?){0,5})\s*",
+                r"[^'\"]?(\d++\.?+\s++([\d\w-]++\:?+\'?+-?+\s?+){0,5})\s*+",
                 True,
                 True,
                 True,
@@ -328,7 +348,7 @@ class HeuristicProcessor:
                 'numeric_title',
             ],  # Numeric Titles
             [
-                r"[^'\"]?(\d+)\s*([\dA-Z\-\'\"\?!#,]+\s*){0,7}\s*",
+                r"[^'\"]?(\d++)\s*+([\dA-Z\-\'\"\?!#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -337,7 +357,7 @@ class HeuristicProcessor:
                 'plain_number',
             ],  # Numeric Chapters, no dot or colon
             [
-                r"\s*[^'\"]?([A-Z#]+(\s|-){0,3}){1,5}\s*",
+                r"\s*[^'\"]?([A-Z#]++(\s|-){0,3}+){1,5}\s*+",
                 False,
                 True,
                 False,
@@ -1041,11 +1061,16 @@ class HeuristicProcessor:
         # If still no sections after unwrapping mark split points on lines with no punctuation
         if self.html_preprocess_sections < self.min_chapters and getattr(self.extra_opts, 'markup_chapter_headings', False):
             self.log.debug('Looking for more split points based on punctuation, currently have ' + str(self.html_preprocess_sections))
+            # (?!([\W]+\s*)+) is true when the next character is not \W, which is what (?!(\W)) says
+            # (the group stays so that the group numbers do not change) without trying every way of dividing a run of \W between the nested repeats. The
+            # whitespace and token repeats are possessive: each is followed by a character it
+            # cannot match (<, a token character, or the end of the token run), so giving
+            # characters back never produces a different match.
             chapdetect3 = re.compile(
-                r'<(?P<styles>(p|div)[^>]*)>\s*(?P<section>(<span[^>]*>)?\s*(?!([\W]+\s*)+)'
-                r'(<[ibu][^>]*>){0,2}\s*(<span[^>]*>)?\s*(<[ibu][^>]*>){0,2}\s*(<span[^>]*>)?\s*'
-                r'.?(?=[a-z#\-*\s]+<)([a-z#-*]+\s*){1,5}\s*\s*(</span>)?(</[ibu]>){0,2}\s*'
-                r'(</span>)?\s*(</[ibu]>){0,2}\s*(</span>)?\s*</(p|div)>)',
+                r'<(?P<styles>(p|div)[^>]*)>\s*+(?P<section>(<span[^>]*>)?\s*+(?!(\W))'
+                r'(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+'
+                r'.?(?=[a-z#\-*\s]++<)([a-z#-*]++\s*+){1,5}\s*+(</span>)?(</[ibu]>){0,2}\s*+'
+                r'(</span>)?\s*+(</[ibu]>){0,2}\s*+(</span>)?\s*+</(p|div)>)',
                 re.IGNORECASE,
             )
             html = chapdetect3.sub(self.chapter_break, html)

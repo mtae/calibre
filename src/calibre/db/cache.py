@@ -2118,10 +2118,8 @@ class Cache:
             if dirtied:
                 self._mark_as_dirty(dirtied)
                 if update_path and do_path_update:
-                    # Moves the folders of the books, which cannot be rolled back.
-                    # Residual: it runs after the field is committed, so a failure
-                    # leaves the new value in place with the old folder names.
-                    change.after_commit(partial(self._update_path, dirtied, mark_as_dirtied=False))
+                    # The folders of the books are staged in the change and the old ones removed after the commit
+                    self._update_path_in_change(change, dirtied, mark_as_dirtied=False)
                 change.after_commit(partial(self._clear_link_map_cache, dirtied))
                 change.after_commit(partial(self.event_dispatcher, EventType.metadata_changed, name, dirtied))
         return dirtied
@@ -2238,19 +2236,26 @@ class Cache:
 
     @quiet_write_api
     def update_path(self, book_ids, mark_as_dirtied=True):
+        with self._change() as change:
+            self._update_path_in_change(change, book_ids, mark_as_dirtied)
+
+    _update_path = update_path
+
+    def _update_path_in_change(self, change, book_ids, mark_as_dirtied=True):
+        "Move the folders of the books to match their titles and authors, as part of the change (see Backend.update_path())"
+        change.modifies(self.fields['path'].table, self.fields['formats'].table, self.fields['size'].table)
+        change.touch('path', book_ids, None, False)
         for book_id in book_ids:
             title = self._field_for('title', book_id, default_value=_('Unknown'))
             try:
                 author = self._field_for('authors', book_id, default_value=(_('Unknown'),))[0]
             except IndexError:
                 author = _('Unknown')
-            self.backend.update_path(book_id, title, author, self.fields['path'], self.fields['formats'])
+            self.backend.update_path(book_id, title, author, self.fields['path'], self.fields['formats'], change=change)
             self.format_metadata_cache.pop(book_id, None)
-            if mark_as_dirtied:
-                self._mark_as_dirty(book_ids)
-            self._clear_link_map_cache(book_ids)
-
-    _update_path = update_path
+        if mark_as_dirtied:
+            self._mark_as_dirty(book_ids)
+        change.after_commit(partial(self._clear_link_map_cache, book_ids))
 
     @read_api
     def get_a_dirtied_book(self):
@@ -3158,8 +3163,7 @@ class Cache:
                     'author_sort',
                     {k: ' & '.join(v) for k, v in self._author_sort_strings_for_books(affected_books).items()},
                 )
-                # Moves the folders of the books, which cannot be rolled back, so it runs after the commit
-                change.after_commit(partial(self._update_path, affected_books, mark_as_dirtied=False))
+                self._update_path_in_change(change, affected_books, mark_as_dirtied=False)
             elif change_index and hasattr(f, 'index_field') and tweaks['series_index_auto_increment'] != 'no_change':
                 for book_id in moved_books:
                     self._set_field(

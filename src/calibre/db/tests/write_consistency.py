@@ -775,76 +775,23 @@ KNOWN_INCONSISTENT = known_table(
         'file:notes.remove_with_retry@2',
         'sql:delete from tags where id=?@1',
     )),
-    # The folders of the books are moved one at a time (inside the loop that updates their paths), failures leave some books in new
-    # folders and others in old ones with inconsistent paths
-    ('rename_items_authors', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
-        'file:copy_tree@1/after',
-        'sql:update data set name=? where book=? and format=?@1',
-        'sql:update data set name=? where book=? and format=?@3',
-    )),
+    # The folders of the books are moved inside the change, the old folder and its empty author folder are removed after the commit, a
+    # failure to remove the author folder leaves it behind
     ('rename_items_authors', {'orphan-folder'}, (
-        'file:copier.copy_all@1',
-        'file:copier.copy_all@2',
-        'file:copier.delete_sources@1',
-        'file:copier.delete_sources@2',
         'file:remove_dir_if_empty@1',
         'file:remove_dir_if_empty@2',
     )),
-    ('rename_items_authors', {'composite-cache', 'field:path', 'format-file-missing'}, (
-        'sql:update books set path=? where id=?@1',
-        'sql:update books set path=? where id=?@2',
+    ('set_authors', {'orphan-folder'}, (
+        'file:remove_dir_if_empty@1',
     )),
     # The saved search is stored in memory before it is written to the preferences
     ('saved_search_add', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',
     )),
-    ('set_authors', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
-        'file:copy_tree@1/after',
-        'sql:update data set name=? where book=? and format=?@1',
-    )),
-    ('set_authors', {'orphan-folder'}, (
-        'file:copier.copy_all@1',
-        'file:copier.delete_sources@1',
-        'file:remove_dir_if_empty@1',
-    )),
-    ('set_authors', {'composite-cache', 'field:path', 'format-file-missing'}, (
-        'sql:update books set path=? where id=?@1',
-    )),
-    # The title and authors are set, and the folder moved, before the other fields
-    ('set_metadata_rename', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
-        'file:copy_tree@1/after',
-    )),
+    # set_metadata sets the title and authors in a change of their own, committed before the folder is moved by another one (it is not in a single
+    # change yet). A failure to remove the empty author folder after the commit leaves it behind
     ('set_metadata_rename', {'orphan-folder'}, (
-        'file:copier.copy_all@1',
-        'file:copier.delete_sources@1',
         'file:remove_dir_if_empty@1',
-    )),
-    ('set_title_two_books', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
-        'file:copy_tree@1/after',
-        'sql:update data set name=? where book=? and format=?@1',
-        'sql:update data set name=? where book=? and format=?@3',
-    )),
-    ('set_title_two_books', {'orphan-folder'}, (
-        'file:copier.copy_all@1',
-        'file:copier.copy_all@2',
-        'file:copier.delete_sources@1',
-        'file:copier.delete_sources@2',
-    )),
-    ('set_title_two_books', {'composite-cache', 'field:path', 'format-file-missing'}, (
-        'sql:update books set path=? where id=?@1',
-        'sql:update books set path=? where id=?@2',
-    )),
-    # The folder of the book is copied to the new name, the sources deleted, and only then are the rows of the data and books tables updated
-    ('update_path', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
-        'file:copy_tree@1/after',
-        'sql:update data set name=? where book=? and format=?@1',
-    )),
-    ('update_path', {'orphan-folder'}, (
-        'file:copier.copy_all@1',
-        'file:copier.delete_sources@1',
-    )),
-    ('update_path', {'composite-cache', 'field:path', 'format-file-missing'}, (
-        'sql:update books set path=? where id=?@1',
     )),
     # The saved searches are stored in the preferences. The in-memory copy is changed before the preference is written
     ('saved_search_delete', {'prefs'}, (

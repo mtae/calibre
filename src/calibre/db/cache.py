@@ -2784,8 +2784,31 @@ class Cache:
 
     # Most fields are set through set_field(), which reports the changed items
     # itself, everything else this changes is reported explicitly below
+    def _all_field_tables(self):
+        'The in-memory tables of all the fields, for a change that may touch any of them (see create_book_entry())'
+        for field in self.fields.values():
+            table = getattr(field, 'table', None)  # Some fields, like ondevice, have no table
+            if table is not None:
+                yield table
+
     @quiet_write_api
     def create_book_entry(self, mi, cover=None, add_duplicates=True, force_id=None, apply_import_tags=True, preserve_uuid=False):
+        # One transaction for the books row, all the metadata and the caches: if
+        # anything fails, nothing of the book is left in the database or in
+        # memory (the tables are re-read from the database). When called
+        # while another change is open (add_books()) this is a savepoint.
+        with self._change() as change:
+            change.modifies(*self._all_field_tables())
+            created = []
+            try:
+                return self._create_book_entry_in_change(change, created, mi, cover, add_duplicates, force_id, apply_import_tags, preserve_uuid)
+            except BaseException:
+                if created:
+                    # Remove the folder and the cover written for the book
+                    change.on_rollback(partial(self._discard_new_book, created[0], self._field_for('path', created[0])))
+                raise
+
+    def _create_book_entry_in_change(self, change, created, mi, cover, add_duplicates, force_id, apply_import_tags, preserve_uuid):
         if mi.tags:
             mi.tags = list(mi.tags)
         if apply_import_tags:
@@ -2819,7 +2842,8 @@ class Cache:
                 (force_id, mi.title, series_index, aus),
             )
         book_id = self.backend.last_insert_rowid()
-        self.event_dispatcher(EventType.book_created, book_id)
+        created.append(book_id)
+        change.after_commit(partial(self.event_dispatcher, EventType.book_created, book_id))
 
         mi.timestamp = utcnow() if (mi.timestamp is None or is_date_undefined(mi.timestamp)) else mi.timestamp
         mi.pubdate = UNDEFINED_DATE if mi.pubdate is None else mi.pubdate
@@ -2868,19 +2892,79 @@ class Cache:
         """
         duplicates, ids = [], []
         for mi, format_map in books:
-            book_id = self.create_book_entry(mi, add_duplicates=add_duplicates, apply_import_tags=apply_import_tags, preserve_uuid=preserve_uuid)
-            if book_id is None:
+            if not add_duplicates and self.has_book(mi):
                 duplicates.append((mi, format_map))
-            else:
-                fmt_map = {}
-                ids.append(book_id)
-                for fmt, stream_or_path in format_map.items():
-                    if self.add_format(book_id, fmt, stream_or_path, dbapi=dbapi, run_hooks=run_hooks):
-                        fmt_map[fmt.lower()] = getattr(stream_or_path, 'name', stream_or_path) or '<stream>'
-                run_plugins_on_postadd(dbapi or self, book_id, fmt_map)
+                continue
+            # Everything about a book (the row, the metadata and the formats) is
+            # one transaction: if it fails the book is not added, the books
+            # before it stay added and the exception is raised.
+            prepared = []
+            try:
+                if run_hooks:
+                    # Run import plugins, the write lock is not held to cater for
+                    # broken plugins that might spin the event loop by popping up a
+                    # message in the GUI during the processing.
+                    for fmt, stream_or_path in format_map.items():
+                        npath = run_import_plugins(stream_or_path, fmt)
+                        hfmt = os.path.splitext(npath)[-1].lower().replace('.', '').upper()
+                        stream = open(make_long_path_useable(npath), 'rb')
+                        prepared.append((fmt, stream_or_path, check_ebook_format(stream, hfmt), stream))
+                else:
+                    prepared = [(fmt, stream_or_path, fmt, stream_or_path) for fmt, stream_or_path in format_map.items()]
+                with self.quiet_write_lock:
+                    book_id, fmt_map = self._add_book_in_one_change(mi, prepared, add_duplicates, apply_import_tags, preserve_uuid, dbapi)
+                if book_id is None:
+                    duplicates.append((mi, format_map))
+                    continue
+                if run_hooks:
+                    # The write lock is released so the plugins can call api without a locking violation.
+                    for fmt, stream_or_path, hfmt, stream in prepared:
+                        run_plugins_on_postimport(dbapi or self, book_id, (hfmt or '').upper())
+            finally:
+                if run_hooks:
+                    for x in prepared:
+                        x[3].close()
+            ids.append(book_id)
+            self.queue_next_fts_job()
+            run_plugins_on_postadd(dbapi or self, book_id, fmt_map)
         return ids, duplicates
 
     _add_books = add_books
+
+    def _add_book_in_one_change(self, mi, prepared, add_duplicates, apply_import_tags, preserve_uuid, dbapi):
+        """ Add a book and its formats in one change (the write lock must be held). Returns (book id, map of the lowercased
+        formats added to their file names), the book id is None if the book is a duplicate. If it raises, the book was not added:
+        the database and the in-memory state are as before, and the folder of the book is removed. """
+        book_id = None
+        with self._change() as change:
+            change.modifies(*self._all_field_tables())
+            try:
+                book_id = self._create_book_entry(mi, add_duplicates=add_duplicates, apply_import_tags=apply_import_tags, preserve_uuid=preserve_uuid)
+                if book_id is None:
+                    return None, {}
+                fmt_map = {}
+                for fmt, stream_or_path, hfmt, stream in prepared:
+                    if self._add_format(book_id, hfmt, stream, run_hooks=False, dbapi=dbapi):
+                        fmt_map[fmt.lower()] = getattr(stream_or_path, 'name', stream_or_path) or '<stream>'
+            except BaseException:
+                if book_id is not None:
+                    path = self._field_for('path', book_id)
+                    change.on_rollback(partial(self._discard_new_book, book_id, path))
+                raise
+        return book_id, fmt_map
+
+    def _discard_new_book(self, book_id, path):
+        # Called when adding a book failed: remove what was written to disk for it, the folder of the book. Its path
+        # always ends with its id, this makes sure that nothing else is ever removed.
+        self.dirtied_cache.pop(book_id, None)
+        self.format_metadata_cache.pop(book_id, None)
+        if path and '/' in path and path.endswith(f' ({book_id})') and '..' not in path.split('/'):
+            full = os.path.join(self.backend.library_path, *path.split('/'))
+            shutil.rmtree(make_long_path_useable(full), ignore_errors=True)
+            try:
+                os.rmdir(os.path.dirname(full))  # The folder of the author if it is empty now
+            except OSError:
+                pass
 
     @write_api
     def remove_books(self, book_ids, permanent=False):

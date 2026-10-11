@@ -153,8 +153,54 @@ def smart_backspace(editor, ev):
         # cursor is preceded by only whitespace
         tw = editor.tw
         text = expand_tabs(text, tw)
-        spclen = max(0, len(text) - (len(text) % tw) - tw)
+        spclen = len(text) - (len(text) % tw or tw)
         cursor.insertText(' ' * spclen)
         editor.setTextCursor(cursor)
         return True
     return False
+
+
+def find_tests():
+    import unittest
+
+    class Cursor:
+        inserted = None
+
+        def hasSelection(self):
+            return False
+
+        def clearSelection(self):
+            pass
+
+        def movePosition(self, *args):
+            return True
+
+        def insertText(self, text):
+            self.inserted = text
+
+    class Editor:
+        def __init__(self, text, tw):
+            self.text, self.tw, self.cursor = text, tw, Cursor()
+
+        def textCursor(self):
+            return self.cursor
+
+        def setTextCursor(self, cursor):
+            pass
+
+        def selected_text_from_cursor(self, cursor):
+            return self.text
+
+    class TestSmartBackspace(unittest.TestCase):
+        def test_smart_backspace_to_previous_tab_stop(self):
+            for tw in (2, 4, 8):
+                for n in range(1, 3 * tw + 1):
+                    ed = Editor(' ' * n, tw)
+                    self.assertTrue(smart_backspace(ed, None))
+                    # the largest multiple of tw that is less than n
+                    self.assertEqual(len(ed.cursor.inserted), (n - 1) // tw * tw, f'{tw=} {n=}')
+            ed = Editor('\t  ', 4)
+            smart_backspace(ed, None)
+            self.assertEqual(len(ed.cursor.inserted), 4)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestSmartBackspace)

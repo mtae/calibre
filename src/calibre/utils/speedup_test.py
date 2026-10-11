@@ -136,6 +136,30 @@ print('OK')
             with self.assertRaises(ValueError, msg=f'state={bad_state}'):
                 speedup.utf8_decode(b'a', bad_state)
 
+    @unittest.skipIf(getattr(sys, 'frozen', False), 'The subprocess helper does not work in frozen builds')
+    def test_clean_xml_chars_empty_subclass(self):
+        "Test that clean_xml_chars() returns a new reference when given an empty str subclass instance"
+        # In a subprocess as dropping the result of the buggy code frees the argument while it is still in use
+        code = '''
+import sys
+from calibre_extensions.speedup import clean_xml_chars
+class S(str):
+    pass
+s = S('')
+before = sys.getrefcount(s)
+r = clean_xml_chars(s)
+if r != '' or sys.getrefcount(s) != before + (r is s):
+    print('refcount of the argument not incremented', before, sys.getrefcount(s))
+    raise SystemExit(1)
+del r
+if sys.getrefcount(s) != before:
+    print('refcount of the argument changed', before, sys.getrefcount(s))
+    raise SystemExit(1)
+print('OK')
+'''
+        p = run_in_subprocess(code)
+        self.ae((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
+
 
 def find_tests():
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestSpeedup)

@@ -1194,9 +1194,10 @@ class TagListEditor(QDialog, Ui_TagListEditor):
                 link = table.item(row, LINK_COLUMN)
                 assert link is not None
                 link.setFlags(link.flags() & ~(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable))
-                note = table.item(row, NOTES_COLUMN)
-                assert note is not None
-                note.setFlags(link.flags() & ~(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable))
+                if self.supports_notes:
+                    note = table.item(row, NOTES_COLUMN)
+                    assert note is not None
+                    note.setFlags(link.flags() & ~(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable))
         if row >= table.rowCount():
             row = table.rowCount() - 1
         if row >= 0:

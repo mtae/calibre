@@ -349,7 +349,8 @@ class RecursiveFetcher:
         diskpath = unicode_path(os.path.join(self.current_dir, 'stylesheets'))
         if not os.path.exists(diskpath):
             os.mkdir(diskpath)
-        for c, tag in enumerate(soup.findAll(name=['link', 'style'])):
+        c = 0  # number of stylesheet files written for this page
+        for tag in soup.findAll(name=['link', 'style']):
             try:
                 mtype = tag['type']
             except KeyError:
@@ -372,6 +373,7 @@ class RecursiveFetcher:
                 except Exception:
                     self.log.exception('Could not fetch stylesheet ', iurl)
                     continue
+                c += 1
                 stylepath = os.path.join(diskpath, 'style' + str(c) + '.css')
                 with self.stylemap_lock:
                     self.stylemap[iurl] = stylepath

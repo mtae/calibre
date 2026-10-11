@@ -63,6 +63,29 @@ class TestFeeds(unittest.TestCase):
         # A duplicate id must only skip that article, not the rest of the feed
         self.assertEqual([a.title for a in feed.articles], ['one', 'three', 'four'])
 
+    def test_stylesheets_get_distinct_files(self):
+        import threading
+
+        from calibre.ebooks.BeautifulSoup import BeautifulSoup
+        from calibre.web.fetch.simple import RecursiveFetcher
+
+        class Fetcher(RecursiveFetcher):
+            def __init__(self, current_dir):
+                self.current_dir, self.stylemap, self.stylemap_lock, self.log = current_dir, {}, threading.RLock(), default_log
+
+            def fetch_url(self, url):
+                return url.encode()
+
+        with tempfile.TemporaryDirectory() as tdir:
+            fetcher = Fetcher(tdir)
+            soup = BeautifulSoup('<html><head><style>@import url(a.css);</style><link type="text/css" href="b.css"></head></html>')
+            fetcher.process_stylesheets(soup, 'http://x/')
+            files = {}
+            for url, path in fetcher.stylemap.items():
+                with open(path, 'rb') as f:
+                    files[url] = f.read()
+            self.assertEqual(files, {'http://x/a.css': b'http://x/a.css', 'http://x/b.css': b'http://x/b.css'})
+
 
 def find_tests() -> unittest.TestSuite:
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestFeeds)

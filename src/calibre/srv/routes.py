@@ -81,7 +81,7 @@ class types_dict(dict):
         ans._hash_val = hash(tuple(sorted(types.items())))
         return ans
 
-    def __hash__(self) -> int:
+    def __hash__(self) -> int:  # ty: ignore[invalid-attribute-override]
         return self._hash_val
 
 
@@ -369,6 +369,7 @@ class Router:
         if endpoint_.needs_db_write:
             assert self.ctx is not None
             self.ctx.check_for_write_access(data)
+            data.needs_db_write = True
         ans = endpoint_(self.ctx, data, *args)
         self.finalize_session(endpoint_, data, ans)
         outheaders = data.outheaders

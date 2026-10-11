@@ -337,6 +337,22 @@ class TestRightToLeftColumns(unittest.TestCase):
         self.assertEqual(f'{LEFT_LINE} 0', texts_of(page)[0])
 
 
+class TestHeaderFooter(unittest.TestCase):
+
+    def test_repeated_header_in_short_document(self):
+        from calibre.ebooks.pdf.reflow import PDFDocument
+        from calibre.utils.logging import default_log
+        opts = Opts()
+        opts.pdf_header_skip = opts.pdf_footer_skip = -1
+        pages = ''.join(
+            f'<page number="{n}" top="0" left="0" height="800" width="600">'
+            '<text top="50" left="100" width="300" height="14" font="0">Annual Report</text>'
+            f'<text top="300" left="100" width="300" height="14" font="0">Body text of page {n}</text></page>'
+            for n in (1, 2))
+        xml = f'<pdf2xml><fontspec id="0" size="12" family="Times" color="#000000"/>{pages}</pdf2xml>'
+        PDFDocument(xml.encode(), opts, default_log)
+
+
 def find_tests():
     return unittest.defaultTestLoader.loadTestsFromNames([
         f'{__name__}.{x.__name__}'
@@ -346,6 +362,7 @@ def find_tests():
             TestSpanningElements,
             TestTables,
             TestRightToLeftColumns,
+            TestHeaderFooter,
         )
     ])
 

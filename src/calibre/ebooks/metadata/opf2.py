@@ -1286,6 +1286,9 @@ class OPF:  # {{{
             for item in list(self.iterguide()):
                 if 'cover' in item.get('type', ''):
                     item.getparent().remove(item)
+            for item in self.guide:
+                if 'cover' in (item.type or '').lower():
+                    self.add_guide_item(item.type, item.title, item.href())
 
         else:
             g = self.create_guide_element()
@@ -1890,6 +1893,19 @@ def suite():
             opf.render(buf)
             raw = buf.getvalue()
             self.testReading(opf=OPF(io.BytesIO(raw), os.getcwd()))
+
+        def testCoverWithGuide(self):
+            raw = b'''<package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="id">
+            <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:identifier id="id">x</dc:identifier></metadata>
+            <manifest><item id="a" href="a.jpg" media-type="image/jpeg"/><item id="b" href="b.jpg" media-type="image/jpeg"/></manifest>
+            <spine/><guide><reference type="cover" title="Cover" href="a.jpg"/><reference type="text" href="t.html"/></guide>
+            </package>'''
+            opf = OPF(io.BytesIO(raw), os.getcwd(), populate_spine=False)
+            self.assertEqual(os.path.basename(opf.cover), 'a.jpg')
+            opf.cover = 'b.jpg'
+            opf = OPF(io.BytesIO(opf.render()), os.getcwd(), populate_spine=False)
+            self.assertEqual(os.path.basename(opf.cover), 'b.jpg')
+            self.assertEqual([x.get('type') for x in opf.iterguide()][:2], ['text', 'cover'])
 
         def testSmartUpdate(self):
             self.opf.smart_update(MetaInformation(self.opf))

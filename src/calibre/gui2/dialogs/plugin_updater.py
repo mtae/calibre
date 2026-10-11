@@ -929,18 +929,24 @@ class PluginUpdaterDialog(SizePersistedDialog):
         ):
             return
 
+        plugin_zip_url = display_plugin.zip_url
+        if DEBUG:
+            prints('Downloading plugin ZIP attachment: ', plugin_zip_url)
+        self.gui.status_bar.showMessage(_('Downloading plugin ZIP attachment: %s') % plugin_zip_url)
+        try:
+            zip_path = self._download_zip(plugin_zip_url)
+        except Exception:
+            self.gui.status_bar.clearMessage()
+            return error_dialog(
+                self.gui, _('Download failed'), _('Failed to download the plugin from: %s') % plugin_zip_url, det_msg=traceback.format_exc(), show=True
+            )
+
         if display_plugin.uninstall_plugins:
             uninstall_names = list(display_plugin.uninstall_plugins)
             if DEBUG:
                 prints('Uninstalling plugin: ', ', '.join(uninstall_names))
             for name_to_remove in uninstall_names:
                 self._uninstall_plugin(name_to_remove)
-
-        plugin_zip_url = display_plugin.zip_url
-        if DEBUG:
-            prints('Downloading plugin ZIP attachment: ', plugin_zip_url)
-        self.gui.status_bar.showMessage(_('Downloading plugin ZIP attachment: %s') % plugin_zip_url)
-        zip_path = self._download_zip(plugin_zip_url)
 
         if DEBUG:
             prints('Installing plugin: ', zip_path)

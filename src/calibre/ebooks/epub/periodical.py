@@ -172,9 +172,10 @@ def sony_metadata(oeb):
                 d += 1
 
             auth = article.author or ''
-            desc = section.description
+            desc = article.description
             if not desc:
                 desc = ''
+            desc = xml(desc)
             aid = f'article{j}'
 
             entries.append(
@@ -194,3 +195,22 @@ def sony_metadata(oeb):
     atom = SONY_ATOM.format(short_title=short_title, entries='\n\n'.join(entries), updated=updated, id=xml(base_id)).encode('utf-8')
 
     return metadata, atom
+
+
+def find_tests():
+    import re
+    import unittest
+    from types import SimpleNamespace
+
+    from calibre.ebooks.oeb.base import TOC
+
+    class PeriodicalTest(unittest.TestCase):
+        def test_sony_metadata_uses_article_description(self):
+            toc = TOC(klass='periodical', title='P')
+            section = toc.add('Sec', 'sec.html', klass='section', description='SECTION DESC')
+            section.add('Art', 'a1.html', klass='article', description='ARTICLE <&> DESC', author='me')
+            metadata = SimpleNamespace(title=['T'], publisher=[], date=[], language=['en'], identifier=[])
+            atom = sony_metadata(SimpleNamespace(metadata=metadata, toc=toc))[1].decode('utf-8')
+            self.assertEqual(re.findall(r'<summary>(.*?)</summary>', atom), ['SECTION DESC', 'ARTICLE &lt;&amp;&gt; DESC'])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(PeriodicalTest)

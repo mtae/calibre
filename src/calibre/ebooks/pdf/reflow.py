@@ -2044,8 +2044,10 @@ class PDFDocument:
         for i in range(LINE_SCAN_COUNT):
             if head_match[i] > pages_to_scan or head_match1[i] > pages_to_scan or head_match2[i] > pages_to_scan:
                 head_ind = i  # Remember the last matching line
-        if self.pages[head_page].texts and (
-            head_match[head_ind] > pages_to_scan or head_match1[head_ind] > pages_to_scan or head_match2[head_ind] > pages_to_scan
+        if (
+            head_page < len(self.pages)
+            and self.pages[head_page].texts
+            and (head_match[head_ind] > pages_to_scan or head_match1[head_ind] > pages_to_scan or head_match2[head_ind] > pages_to_scan)
         ):
             t = self.pages[head_page].texts[head_ind]
             head_skip = t.top + t.height + 1

@@ -422,7 +422,7 @@ class Reader(FormatReader):
                                 x_off += w
                                 largest_height = max(largest_height, h)
                             y_off += largest_height
-                    with open(f'{uid}.jpg') as out:
+                    with open(f'{uid}.jpg', 'wb') as out:
                         out.write(canvas.export(compression_quality=70))
                     self.log.debug(f'Wrote composite image with uid {uid} to images/{uid}.jpg')
                 except Exception as e:

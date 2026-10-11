@@ -160,7 +160,7 @@ class Feed:
             if not id:
                 id = f'internal id#{self.id_counter}'
             if id in self.added_articles:
-                return
+                continue
             self.added_articles.append(id)
             published = time.gmtime(item.get('timestamp', time.time()))
             title = item.get('title', _('Untitled article'))

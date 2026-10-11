@@ -1811,7 +1811,7 @@ class DeviceBooksModel(BooksModel):  # {{{
             app_id = getattr(data, 'application_id', None)
             if app_id is not None and app_id in db_ids:
                 data.in_library = to_what
-            self.beginResetModel(), self.endResetModel()
+        self.beginResetModel(), self.endResetModel()
 
     def flags(self, index):
         if self.is_row_marked_for_deletion(index.row()):

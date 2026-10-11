@@ -272,19 +272,29 @@ class TXTInput(InputFormatPlugin):
         # Normalize line endings
         txt = normalize_line_endings(txt)
 
-        # Determine the paragraph type of the document.
-        if options.paragraph_type == 'auto':
+        # Detect formatting. This must happen before the paragraph type is
+        # determined, because Markdown must not go through paragraph type
+        # detection or rewriting (see below). detect_formatting_type() only
+        # looks at the text, so the order does not change its result.
+        if options.formatting_type == 'auto':
+            options.formatting_type = detect_formatting_type(txt)
+            log.debug(f'Auto detected formatting as {options.formatting_type}')
+
+        # Determine the paragraph type of the document. Markdown has its own
+        # paragraph rules: the single/print/block rewrites below double or
+        # join newlines, which breaks fenced code, tables and lists, so an
+        # unspecified (auto) paragraph type means off for Markdown. A
+        # paragraph type given explicitly by the user is still honored.
+        if options.paragraph_type == 'auto' and options.formatting_type == 'markdown':
+            log.debug('Markdown formatting: not detecting or rewriting paragraph type')
+            options.paragraph_type = 'off'
+        elif options.paragraph_type == 'auto':
             options.paragraph_type = detect_paragraph_type(txt)
             if options.paragraph_type == 'unknown':
                 log.debug('Could not reliably determine paragraph type using block')
                 options.paragraph_type = 'block'
             else:
                 log.debug(f'Auto detected paragraph type as {options.paragraph_type}')
-
-        # Detect formatting
-        if options.formatting_type == 'auto':
-            options.formatting_type = detect_formatting_type(txt)
-            log.debug(f'Auto detected formatting as {options.formatting_type}')
 
         if options.formatting_type == 'heuristic':
             setattr(options, 'enable_heuristics', True)
@@ -398,6 +408,7 @@ class TXTInput(InputFormatPlugin):
 
 
 def find_tests():
+    import re
     import unittest
 
     class TXTInputTest(unittest.TestCase):
@@ -408,6 +419,86 @@ def find_tests():
             self.assertEqual(txtz_formatting_for_extension('markdown'), 'markdown')
             self.assertEqual(txtz_formatting_for_extension('.textile'), 'textile')
             self.assertIsNone(txtz_formatting_for_extension('.txt'))
+
+        def convert_to_html(self, name, text, *args):
+            # Convert text via the CLI to an EPUB and return the main XHTML file and the CSS
+            import tempfile
+            import zipfile
+
+            from calibre.ebooks.conversion.cli import main
+
+            with tempfile.TemporaryDirectory() as tdir:
+                src, dest = os.path.join(tdir, name), os.path.join(tdir, 'out.epub')
+                with open(src, 'w', encoding='utf-8') as f:
+                    f.write(text)
+                import io
+                from contextlib import redirect_stderr, redirect_stdout
+
+                out = io.StringIO()
+                with redirect_stdout(out), redirect_stderr(out):
+                    ret = main(['ebook-convert', src, dest, '--language', 'en', '--title', 'T', '--authors', 'A', *args])
+                self.assertFalse(ret, out.getvalue())
+                with zipfile.ZipFile(dest) as zf:
+                    names = zf.namelist()
+                    html = ''.join(zf.read(n).decode('utf-8') for n in names if n.endswith('.xhtml') or n.endswith('.html'))
+                    css = ''.join(zf.read(n).decode('utf-8') for n in names if n.endswith('.css'))
+            return html, css
+
+        # Ragged prose (no blank lines, varying line lengths): detect_paragraph_type() says 'single'
+        RAGGED = (
+            'The first line of this ragged prose is quite a bit longer than the others are here\n'
+            'short\n'
+            'a medium sized line of text\n'
+            'x\n'
+            'Another reasonably long line that goes on for a while before it finally ends here\n'
+            'tiny\n'
+            'and one more of medium length\n'
+            'z\n'
+        ) * 3
+        MD_BLOCKS = (
+            '\n\n# Title\n\n'
+            '| h1 | h2 |\n|----|----|\n| a1 | b1 |\n| a2 | b2 |\n\n'
+            '```\ndef f():\n    x = 1\n\n    return x\n```\n\n'
+            '* item one\n* item two\n* item three\n\n'
+        )
+
+        def check_markdown_blocks(self, html):
+            self.assertIn('<table', html)
+            self.assertEqual(html.count('<tr'), 3, html)  # header + 2 rows, not 4 separate paragraphs
+            self.assertNotIn('| a1', html)
+            self.assertIn('<ul', html)
+            self.assertEqual(html.count('<li'), 3)
+            # the fence is an unrendered (fenced_code is off) inline code span but must hold the code on one run
+            # with fenced_code on it is a pre/code block with the blank line kept as a single newline
+            self.assertIn('x = 1', html)
+
+        def test_markdown_skips_paragraph_type(self):
+            text = self.RAGGED + self.MD_BLOCKS
+            for args, name in (
+                (('--formatting-type', 'markdown', '--markdown-extensions', 'tables,fenced_code'), 'book.txt'),  # given
+                ((), 'book.txt'),  # auto detected (# heading)
+                (('--markdown-extensions', 'tables,fenced_code'), 'book.md'),  # by extension (already worked)
+            ):
+                html, css = self.convert_to_html(name, text, *args)
+                self.check_markdown_blocks(html)
+                m = re.search(r'<pre[^>]*>(.*?)</pre>', html, re.S)
+                self.assertTrue(m, (args, html))
+                # exactly one newline between lines: the blank line inside the code block is kept, not doubled
+                self.assertIn('x = 1\n\n', m.group(1).replace('<span>', ''), (args, m.group(1)))
+                self.assertNotIn('\n\n\n', m.group(1), args)
+
+        def test_markdown_explicit_paragraph_type_honored(self):
+            # An explicitly requested paragraph type is still applied to Markdown input, as before
+            html, css = self.convert_to_html(
+                'book.txt', self.RAGGED + '\n# Title\n', '--formatting-type', 'markdown', '--paragraph-type', 'single')
+            self.assertGreaterEqual(html.count('<p'), 20, html)
+
+        def test_non_markdown_paragraph_type_unchanged(self):
+            # Plain text still goes through paragraph type detection: every ragged line becomes its own paragraph
+            html, css = self.convert_to_html('book.txt', self.RAGGED, '--formatting-type', 'plain')
+            self.assertEqual(len(re.findall(r'<p[ >]', html)), 24, html)
+            html, css = self.convert_to_html('book.txt', self.RAGGED)  # auto: plain
+            self.assertEqual(len(re.findall(r'<p[ >]', html)), 24, html)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TXTInputTest)
 

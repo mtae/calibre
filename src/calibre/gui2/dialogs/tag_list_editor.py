@@ -579,7 +579,7 @@ class TagListEditor(QDialog, Ui_TagListEditor):
         item = table.itemAt(point)
         if item is None or item.column() in (WAS_COLUMN, COUNT_COLUMN):
             return
-        m = QMenu()
+        m = QMenu(self)
         if item.column() == NOTES_COLUMN:
             notes_item = table.item(item.row(), VALUE_COLUMN)
             assert notes_item is not None

@@ -53,10 +53,7 @@ def format_prompt_template(template: str, **kwargs: str) -> str:
 class Action(ActionData):
     @property
     def uses_selected_text(self) -> bool:
-        for _x, fname, _x, _x in string.Formatter().parse(self.prompt_template):
-            if fname == 'selected':
-                return True
-        return False
+        return uses_field(self.prompt_template, 'selected')
 
     def prompt_text(self, selected_text: str = '') -> str:
         probably_has_multiple_words = len(selected_text) > 20 or ' ' in selected_text

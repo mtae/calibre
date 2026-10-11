@@ -337,7 +337,7 @@ def metadata_from_xmp_packet(raw_bytes):
         if scheme not in identifiers:
             val = check_func(first_simple('//dc:identifier', root))
             if val:
-                identifiers['doi'] = val
+                identifiers[scheme] = val
 
     if identifiers:
         mi.set_identifiers(identifiers)
@@ -660,6 +660,20 @@ def merge_xmp_packet(old, new):
             clone_into(desc, item)
 
     return serialize_xmp_packet(root)
+
+
+def find_tests():
+    import unittest
+
+    class Test(unittest.TestCase):
+
+        def test_dc_identifier_isbn(self):
+            raw = b'''<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier>9780306406157</dc:identifier></rdf:Description>
+</rdf:RDF></x:xmpmeta>'''
+            self.assertEqual(metadata_from_xmp_packet(raw).get_identifiers(), {'isbn': '9780306406157'})
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)
 
 
 if __name__ == '__main__':

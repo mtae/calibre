@@ -29,7 +29,6 @@ exclusion from the generator, so that the random test covers the fix.
 """
 
 import random
-import unittest
 from datetime import UTC, datetime
 from io import BytesIO
 from itertools import groupby
@@ -469,7 +468,9 @@ class Harness:
         from calibre.ebooks.metadata.book.base import Metadata
 
         mi = Metadata(title, authors)
-        mi.tags, mi.series, mi.series_index = tags, series, series_index
+        mi.tags, mi.series = tags, series
+        if series_index is not None:
+            mi.series_index = series_index
         self.cache.add_books([(mi, {f: BytesIO(b'new ' + f.encode()) for f in fmts})])
 
     def op_remove_book(self, book_id):
@@ -580,9 +581,7 @@ class Harness:
         return 'rename_items', field, rng.choice(names), rng.choice(pool + ('Brand New ' + field,))
 
     def gen_remove_items(self, rng, cache, ids):
-        # Not the series fields, removing a series leaves the search cache stale, see
-        # test_stale_search_after_remove_series
-        field = rng.choice(('tags', 'publisher', '#tags', '#authors'))
+        field = rng.choice(('tags', 'series', 'publisher', '#tags', '#authors', '#series'))
         names = sorted(cache.all_field_names(field))
         if not names:
             return None
@@ -595,9 +594,8 @@ class Harness:
             rng.sample(AUTHORS, rng.randint(1, 2)),
             rng.sample(TAGS, rng.randint(0, 3)),
             rng.choice(SERIES + (None,)),
-            # An explicit index, as one that is assigned automatically for a
-            # series that has books leaves a stale composite, see test_stale_composite_after_add_to_series
-            rng.choice((1.0, 2.5, 7.0)),
+            # None is an index assigned automatically
+            rng.choice((None, 1.0, 2.5, 7.0)),
             rng.sample(FORMATS, rng.randint(0, 2)),
         )
 
@@ -905,7 +903,6 @@ class CacheRecomputeTest(BaseTest):
             self.run_random(seed, 50)
 
     # Stale caches found by the random test, each with the minimal reproduction {{{
-    @unittest.expectedFailure
     def test_stale_composite_after_add_to_series(self):
         "A new book added to a series that has books has its series index assigned after the composite columns that use it were rendered"
         from calibre.ebooks.metadata.book.base import Metadata
@@ -924,7 +921,6 @@ class CacheRecomputeTest(BaseTest):
         # (cache.py ~2736-2742) without clearing the composite and search caches
         self.assert_same_as_fresh(cache, 'field_for', '#cidx', book_id)
 
-    @unittest.expectedFailure
     def test_stale_search_after_remove_series(self):
         "Removing a series does not update cached searches for books whose series index does not change"
         cache = self.init_cache()

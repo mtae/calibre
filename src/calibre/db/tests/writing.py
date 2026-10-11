@@ -1372,3 +1372,49 @@ class WritingTest(BaseTest):
         del old
 
     # }}}
+
+    def test_change_invalidates_derived_caches(self):  # {{{
+        "Test that a committed change clears the composite and search caches for the books it touched, before the callbacks and listeners run"
+        cache = self.init_cache()
+        cache.create_custom_column('cc', 'CC', 'composite', False, display={'composite_template': '{title}'})
+        cache.close()
+        cache = self.init_cache()
+        title_table = cache.fields['title'].table
+
+        def edit_title(change, val):
+            # Changes the database and memory without clearing any cache, as a writer that does not would
+            cache.backend.execute('UPDATE books SET title=? WHERE id=1', (val,))
+            title_table.book_col_map[1] = val
+            change.modifies(title_table)
+            change.touch('title', (1,))
+
+        def observe(c):
+            return c.search('title:Changed'), c.search('title:Other'), c.field_for('#cc', 1)
+
+        # Fill the caches
+        old = cache.field_for('title', 1)
+        self.assertEqual((set(), set(), old), observe(cache))
+        seen = {}
+        cache.change_listeners.append(lambda record: seen.update(listener=observe(cache)))
+        with cache.write_lock:
+            with cache._change() as change:
+                edit_title(change, 'Changed')
+                change.after_commit(lambda: seen.update(callback=observe(cache)))
+        expected = ({1}, set(), 'Changed')
+        self.assertEqual(expected, observe(self.init_cache(cache.backend.library_path)), 'fresh cache differs')
+        self.assertEqual(expected, seen.get('callback'), 'after_commit callback saw stale caches')
+        self.assertEqual(expected, seen.get('listener'), 'change listener saw stale caches')
+        self.assertEqual(expected, observe(cache))
+        # A failed change clears them as well, caches filled from the memory it changed are not kept
+        del cache.change_listeners[:]
+        with self.assertRaises(ValueError):
+            with cache.write_lock:
+                with cache._change() as change:
+                    edit_title(change, 'Other')
+                    cache._clear_composite_caches((1,))
+                    cache._clear_search_caches((1,))
+                    self.assertEqual((set(), {1}, 'Other'), observe(cache))
+                    raise ValueError('failed')
+        self.assertEqual(expected, observe(cache), 'caches kept the values of a change that was rolled back')
+
+    # }}}

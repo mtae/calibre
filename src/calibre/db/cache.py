@@ -2039,8 +2039,20 @@ class Cache:
                 self._clear_composite_caches(books)
             self._clear_search_caches(books)
 
+    def _invalidate_derived(self, record):
+        # The caches derived from the books (rendered composite columns, cached searches and the virtual libraries of
+        # books) are cleared for the books the change touched. This is the twin of what _rollback_change() does for a
+        # failed change, so that a write that changes the state of a book after, or without, an explicit clear leaves
+        # no stale cache. Runs before the callbacks and the listeners so that they see consistent caches.
+        books = record.book_ids
+        if books:
+            if self.composites:
+                self._clear_composite_caches(books)
+            self._clear_search_caches(books)
+
     def _apply_change(self, record):
         error = None
+        self._invalidate_derived(record)
         for name, (books, items, report_books) in record.fields.items():
             self.categories_cache.field_changed(name, items, books if report_books else None)
         calls = [*record.callbacks, *(partial(listener, record) for listener in self.change_listeners)]

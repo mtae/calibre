@@ -125,7 +125,10 @@ class MarkdownMLizer(OEB2HTML):
 
         # Soft scene breaks.
         if 'margin-top' in style.cssdict() and style['margin-top'] != 'auto':
-            ems = int(round(float(style.marginTop) / style.fontSize) - 1)
+            try:
+                ems = int(round(float(style.marginTop) / style.fontSize) - 1)
+            except Exception:  # e.g. calc() margins or a zero font size
+                ems = 0
             if ems >= 1:
                 text.append('\n\n' * ems)
 
@@ -261,7 +264,10 @@ class MarkdownMLizer(OEB2HTML):
 
         # Soft scene breaks.
         if 'margin-bottom' in style.cssdict() and style['margin-bottom'] != 'auto':
-            ems = round((float(style.marginBottom) / style.fontSize) - 1)
+            try:
+                ems = round((float(style.marginBottom) / style.fontSize) - 1)
+            except Exception:  # e.g. calc() margins or a zero font size
+                ems = 0
             if ems >= 1:
                 text.append('\n\n' * ems)
 
@@ -277,3 +283,35 @@ class MarkdownMLizer(OEB2HTML):
             text.append(tail)
 
         return text
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    from calibre.customize.profiles import input_profiles, output_profiles
+    from calibre.ebooks.oeb.base import XHTML_MIME, OEBBook
+    from calibre.ebooks.txt.textileml import TextileMLizer
+    from calibre.utils.logging import default_log
+    from calibre.utils.xml_parse import safe_xml_fromstring
+
+    class MarkdownMLTest(unittest.TestCase):
+        def test_unparsable_margins_do_not_abort(self):
+            opts = SimpleNamespace(
+                output_profile=output_profiles[0](None), source_profile=input_profiles[0](None), change_justification='original',
+                keep_links=False, keep_image_references=False, use_alt_text_for_images=False, unsmarten_punctuation=False,
+                keep_color=False, max_line_length=0, force_max_line_length=False)
+            for cls in (MarkdownMLizer, TextileMLizer):
+                for css in (
+                    'p{margin-top:calc(1em + 2px)}', 'p{margin-bottom:calc(1em + 2px)}',
+                    'p{font-size:0;margin-top:2em}', 'p{font-size:0;margin-bottom:2em}',
+                ):
+                    with self.subTest(cls=cls.__name__, css=css):
+                        oeb = OEBBook(default_log)
+                        html = safe_xml_fromstring(
+                            f'<html xmlns="{XHTML_NS}"><head><title>t</title><style>{css}</style></head><body><p>one</p><p>two</p></body></html>')
+                        item = oeb.manifest.add('c', 'c.html', XHTML_MIME, data=html)
+                        oeb.spine.add(item, True)
+                        self.assertIn('two', cls(default_log).extract_content(oeb, opts))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(MarkdownMLTest)

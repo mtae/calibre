@@ -3027,7 +3027,7 @@ class CatalogBuilder:
                 makeelement('content', navPointTag, src='content/ByAlphaTitle.html')
             elif self.opts.generate_series:
                 makeelement('content', navPointTag, src='content/BySeries.html')
-            elif self.opts.generate_genres:
+            elif self.opts.generate_genres and self.genres:
                 makeelement('content', navPointTag, src='{}'.format(self.genres[0]['file']))
             elif self.opts.generate_recently_added:
                 makeelement('content', navPointTag, src='content/ByDateAdded.html')
@@ -4396,3 +4396,25 @@ class CatalogBuilder:
         ncx = etree.tostring(self.ncx_root, encoding='utf-8')
         with open(f'{self.catalog_path}/{self.opts.basename}.ncx', 'wb') as outfile:
             outfile.write(ncx)
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    class CatalogBuilderTest(unittest.TestCase):
+        def test_ncx_header_without_genres(self):
+            for recent, src in ((True, 'content/ByDateAdded.html'), (False, 'content/book_7.html')):
+                builder = object.__new__(CatalogBuilder)
+                builder.update_progress_full_step = lambda *a: None
+                builder.generate_for_kindle_mobi = True
+                builder.play_order = 1
+                builder.genres = []  # no book has genre tags
+                builder.books_by_description = [{'id': 7}]
+                builder.opts = SimpleNamespace(
+                    generate_authors=False, generate_titles=False, generate_series=False, generate_genres=True,
+                    generate_recently_added=recent, generate_descriptions=True, catalog_title='T')
+                builder.generate_ncx_header()
+                self.assertEqual(builder.ncx_root.xpath('//*[local-name()="content"]/@src'), [src])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(CatalogBuilderTest)

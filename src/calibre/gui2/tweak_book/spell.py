@@ -455,18 +455,20 @@ class ManageUserDictionaries(Dialog):
 
     def show_current_dictionary(self, *args):
         d = self.current_dictionary
+        self.words.clear()
         if d is None:
             return
         self.dlabel.setText(_('Configure the dictionary: <b>%s') % d.name)
         self.is_active.blockSignals(True)
         self.is_active.setChecked(d.is_active)
         self.is_active.blockSignals(False)
-        self.words.clear()
         for word, lang in sorted(d.words, key=lambda x: sort_key(x[0])):
             i = QListWidgetItem(f'{word} [{get_language(lang)}]', self.words)
             i.setData(Qt.ItemDataRole.UserRole, (word, lang))
 
     def add_word(self):
+        if self.current_dictionary is None:
+            return error_dialog(self, _('No dictionary'), _('Create a user dictionary first'), show=True)
         d = QDialog(self)
         l = QFormLayout(d)
         d.setWindowTitle(_('Add a word'))
@@ -496,6 +498,8 @@ class ManageUserDictionaries(Dialog):
             self.words.scrollToItem(self.words.item(idx))
 
     def import_words(self):
+        if self.current_dictionary is None:
+            return error_dialog(self, _('No dictionary'), _('Create a user dictionary first'), show=True)
         d = QDialog(self)
         l = QFormLayout(d)
         d.setWindowTitle(_('Import list of words'))

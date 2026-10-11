@@ -14,6 +14,7 @@ from calibre.ebooks.docx.names import DOCXNamespace
 from calibre.ebooks.docx.writer.container import DocumentRelationships
 from calibre.ebooks.docx.writer.from_html import Block, Blocks, TextRun
 from calibre.ebooks.docx.writer.links import LinksManager
+from calibre.ebooks.docx.writer.tables import SpannedCell, Table
 from calibre.utils.logging import DevNull
 from calibre.utils.resources import get_image_path as I
 
@@ -345,6 +346,27 @@ class TestWhitespace(BaseTest):
             self.assertIn('Trailing: text\xa0', paragraphs)
 
 
+class TestTables(unittest.TestCase):
+    def expand(self, *rows):
+        # Each cell is a name or a (name, row_span) tuple, spanned cells are shown as ~name
+        def cell(c):
+            name, row_span = c if isinstance(c, tuple) else (c, 1)
+            return SimpleNamespace(name=name, row_span=row_span, col_span=1)
+
+        table = SimpleNamespace(rows=[SimpleNamespace(cells=[cell(c) for c in row]) for row in rows])
+        Table.expand_spanned_cells(table)
+        return [['~' + c.spanning_cell.name if isinstance(c, SpannedCell) else c.name for c in row.cells] for row in table.rows]
+
+    def test_rowspan_does_not_overshoot(self):
+        self.assertEqual(
+            self.expand([('A', 2), 'B'], ['C'], ['D', 'E'], ['F', 'G']),
+            [['A', 'B'], ['~A', 'C'], ['D', 'E'], ['F', 'G']])
+
+    def test_rowspan_above_empty_row(self):
+        rows = self.expand(['A', ('B', 2)], [])
+        self.assertEqual(rows[1], ['~B', '~B'])
+
+
 def find_tests():
     loader = unittest.defaultTestLoader
-    return unittest.TestSuite(loader.loadTestsFromTestCase(cls) for cls in (TestHyperlinks, TestWhitespace))
+    return unittest.TestSuite(loader.loadTestsFromTestCase(cls) for cls in (TestHyperlinks, TestWhitespace, TestTables))

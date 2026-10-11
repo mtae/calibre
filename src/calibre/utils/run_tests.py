@@ -840,6 +840,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.html.input import find_tests
 
         a(find_tests())
+        from calibre.web.feeds.test_feeds import find_tests
+
+        a(find_tests())
         from calibre.utils.avif_test import find_tests
 
         a(find_tests())

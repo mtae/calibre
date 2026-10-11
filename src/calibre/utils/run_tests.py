@@ -822,6 +822,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.metadata.sources.search_engines import find_tests
 
         a(find_tests())
+        from calibre.ebooks.metadata.book.render import find_tests
+
+        a(find_tests())
         from calibre.utils.xml_parse import find_tests
 
         a(find_tests())
@@ -955,6 +958,21 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.gui2.preferences.emailp import find_tests
+
+        a(find_tests())
+        from calibre.gui2.store.stores.ebookpoint_plugin import find_tests
+
+        a(find_tests())
+        from calibre.gui2.metadata.single_download import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.editor.smarts.utils import find_tests
+
+        a(find_tests())
+        from calibre.gui2.actions.random import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.live_css import find_tests
 
         a(find_tests())
         if iswindows:

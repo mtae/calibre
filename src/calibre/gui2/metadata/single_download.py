@@ -240,7 +240,7 @@ class ResultsModel(QAbstractTableModel):  # {{{
                 return x
 
         self.beginResetModel()
-        self.results.sort(key=key, reverse=order == Qt.SortOrder.AscendingOrder)
+        self.results.sort(key=key, reverse=order == Qt.SortOrder.DescendingOrder)
         self.endResetModel()
 
 
@@ -1328,6 +1328,30 @@ class CoverFetch(QDialog):  # {{{
 
 
 # }}}
+
+
+def find_tests():
+    import unittest
+
+    class TestResultsModel(unittest.TestCase):
+        def test_results_model_sort_order(self):
+            books = []
+            for rank, title in enumerate('bca'):
+                book = Metadata(title)
+                book.gui_rank = rank
+                books.append(book)
+            m = ResultsModel(books)
+            for col, order, expected in (
+                (1, Qt.SortOrder.AscendingOrder, 'abc'),
+                (1, Qt.SortOrder.DescendingOrder, 'cba'),
+                (0, Qt.SortOrder.AscendingOrder, 'bca'),
+                (0, Qt.SortOrder.DescendingOrder, 'acb'),
+            ):
+                m.sort(col, order)
+                self.assertEqual(''.join(b.title for b in m.results), expected, f'column {col} order {order}')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestResultsModel)
+
 
 if __name__ == '__main__':
     from calibre.gui2 import Application

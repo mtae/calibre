@@ -55,9 +55,11 @@ class EbookpointStore(BasicStoreConfig, StorePlugin):
             d.exec()
 
     def search(self, query, max_results=25, timeout=60):
+        if isinstance(query, bytes):
+            query = query.decode('utf-8')
         url = (
             'http://ebookpoint.pl/search?qa=&szukaj='
-            + quote_plus(query.decode('utf-8').encode('iso-8859-2'))
+            + quote_plus(query.encode('iso-8859-2', 'replace'))
             + '&serwisyall=0&wprzyg=0&wsprzed=1&wyczerp=0&formaty=em-p'
         )
 
@@ -92,3 +94,28 @@ class EbookpointStore(BasicStoreConfig, StorePlugin):
                 s.formats = formats.upper()
 
                 yield s
+
+
+def find_tests():
+    import unittest
+    from io import BytesIO
+    from unittest.mock import patch
+
+    class TestEbookpointSearch(unittest.TestCase):
+        def test_search_accepts_str_and_bytes_query(self):
+            html = b'<html><body><ul class="list"><li><a href="/book1">x</a></li></ul></body></html>'
+            urls = []
+
+            class Browser:
+                def open(self, url, timeout=None):
+                    urls.append(url)
+                    return BytesIO(html)
+
+            with patch(f'{__name__}.browser', Browser):
+                for query in ('za\u017c\u00f3\u0142\u0107', 'za\u017c\u00f3\u0142\u0107'.encode()):
+                    del urls[:]
+                    results = list(EbookpointStore.search(None, query))
+                    self.assertEqual([r.detail_item for r in results], ['/book1'])
+                    self.assertIn('szukaj=za%BF%F3%B3%E6&', urls[0])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestEbookpointSearch)

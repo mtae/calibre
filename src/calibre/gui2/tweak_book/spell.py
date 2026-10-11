@@ -1193,12 +1193,14 @@ class ManageExcludedFiles(Dialog):
 
 class SuggestedList(QListWidget):
     def next_word(self):
-        row = (self.currentRow() + 1) % self.count()
-        self.setCurrentRow(row)
+        if self.count():
+            row = (self.currentRow() + 1) % self.count()
+            self.setCurrentRow(row)
 
     def previous_word(self):
-        row = (self.currentRow() - 1 + self.count()) % self.count()
-        self.setCurrentRow(row)
+        if self.count():
+            row = (self.currentRow() - 1 + self.count()) % self.count()
+            self.setCurrentRow(row)
 
 
 class SpellCheck(Dialog):

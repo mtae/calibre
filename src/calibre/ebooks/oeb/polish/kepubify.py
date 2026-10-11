@@ -282,16 +282,19 @@ def unwrap(span: etree.Element) -> None:
     p = span.getparent()
     assert p is not None
     idx = p.index(span)
+    children = tuple(span)
     del p[idx]
-    if len(span):
-        p.insert(idx, span[0])
+    p[idx:idx] = children
+    text = span.text or ''
+    if children:
+        children[-1].tail = (children[-1].tail or '') + (span.tail or '')
     else:
-        text = (span.text or '') + (span.tail or '')
-        if idx > 0:
-            prev = p[idx - 1]
-            prev.tail = (prev.tail or '') + text
-        else:
-            p.text = (p.text or '') + text
+        text += span.tail or ''
+    if idx > 0:
+        prev = p[idx - 1]
+        prev.tail = (prev.tail or '') + text
+    else:
+        p.text = (p.text or '') + text
 
 
 def remove_kobo_spans(body: etree.Element) -> bool:

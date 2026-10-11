@@ -973,15 +973,24 @@ def _ensure_late(times=None):
         return False
     ostdout, ostderr = sys.stdout, sys.stderr
     full = []
-    for item in order:
-        if isinstance(item, str):
-            for cls in late_group(item):
-                p = _initialize_entry(cls, PluginInstallationType.BUILTIN, times)
-                if p is not None:
-                    full.append(p)
-        else:
-            full.append(item)
-    sys.stdout, sys.stderr = ostdout, ostderr
+    try:
+        for item in order:
+            if isinstance(item, str):
+                try:
+                    classes = list(late_group(item))
+                except Exception:
+                    # A group that fails to import must not take the other groups with it
+                    print('Failed to import the late plugin group:', repr(item), file=ostderr)
+                    traceback.print_exc(file=ostderr)
+                    continue
+                for cls in classes:
+                    p = _initialize_entry(cls, PluginInstallationType.BUILTIN, times)
+                    if p is not None:
+                        full.append(p)
+            else:
+                full.append(item)
+    finally:
+        sys.stdout, sys.stderr = ostdout, ostderr
     # Plugins in _initialized_plugins but not in `order` (added by code that
     # manipulates the list directly) go after the known ones.
     rank = {id(p): i for i, p in enumerate(full)}

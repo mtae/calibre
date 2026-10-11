@@ -80,4 +80,38 @@ def find_tests():
             self.assertEqual([n for n in r['full'] if n not in LATE_NAMES], r['early'], 'order of the early plugins changed')
             self.assertEqual(r['full'], [p.name for p in ui.initialized_plugins()], 'lazy order differs from eager order')
 
+        def test_failing_group_does_not_block_the_others(self):
+            import io
+            import sys
+
+            real = ui.late_group
+            out, err = sys.stdout, sys.stderr
+            captured = io.StringIO()
+
+            def bad_group(name):
+                if name == 'devices':
+                    sys.stdout = io.StringIO()  # what a misbehaving import may leave behind
+                    raise ImportError('injected failure')
+                return real(name)
+
+            try:
+                ui.initialize_plugins()  # all late groups pending again
+                ui.late_group = bad_group
+                sys.stderr = captured
+                try:
+                    ui._ensure_late()
+                finally:
+                    sys.stderr = err
+                self.assertIs(sys.stdout, out, 'stdout not restored after a failing group')
+                names = {p.name for p in ui._initialized_plugins}
+                self.assertTrue({c.name for c in real('ai')} <= names, 'AI providers lost because the devices group failed')
+                self.assertTrue({c.name for c in real('archive')} <= names, 'archive plugins lost because the devices group failed')
+                self.assertFalse({c.name for c in real('devices')} & names)
+                self.assertIn('injected failure', captured.getvalue())
+            finally:
+                ui.late_group = real
+                sys.stdout, sys.stderr = out, err
+                ui.initialize_plugins()
+                ui._ensure_late()
+
     return unittest.defaultTestLoader.loadTestsFromTestCase(LazyPluginsTest)

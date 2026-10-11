@@ -1038,7 +1038,7 @@ class TagsModel(QAbstractItemModel):  # {{{
                                 if d['last'].sort is None:
                                     d['last'].sort = data[key][last].name
 
-                            name = eval_formatter.safe_format(collapse_template, d, '##TAG_VIEW##', None)
+                            name = eval_formatter.safe_format(collapse_template, d, '##TAG_VIEW##', {})
                             if name.startswith('##TAG_VIEW##'):
                                 # Formatter threw an exception. Don't create subnode
                                 node_parent = sub_cat = category

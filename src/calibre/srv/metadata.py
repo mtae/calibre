@@ -464,7 +464,7 @@ def collapse_partition(
         else:
             format_data = {'first': tag, 'last': category_items[last]}
 
-        name = eval_formatter.safe_format(opts.template, format_data, '##TAG_VIEW##', None)
+        name = eval_formatter.safe_format(opts.template, format_data, '##TAG_VIEW##', {})
         if not name.startswith('##TAG_VIEW##'):
             # Formatter succeeded
             node_id = category_as_json(

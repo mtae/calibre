@@ -82,8 +82,9 @@ class HeuristicProcessor:
         span = match.group('span')
         self.found_indents = self.found_indents + 1
         if pstyle:
-            if pstyle.lower().find('style') != -1:
-                pstyle = re.sub(r'"$', '; text-indent:3%"', pstyle)
+            m = re.search(r'\sstyle\s*=\s*(["\'])(.*?)\1', pstyle, flags=re.IGNORECASE | re.DOTALL)
+            if m is not None:
+                pstyle = pstyle[:m.end(2)] + '; text-indent:3%' + pstyle[m.end(2):]
             else:
                 pstyle = pstyle + ' style="text-indent:3%"'
             if not span:
@@ -1066,3 +1067,26 @@ class HeuristicProcessor:
             # put back non-breaking spaces in empty paragraphs so they render correctly
             html = self.anyblank.sub(r'\n\g<openline>' + '\u00a0' + r'\g<closeline>', html)
         return html
+
+
+def find_tests():
+    import unittest
+
+    class HeuristicProcessorTest(unittest.TestCase):
+        def test_fix_nbsp_indents_keeps_attributes(self):
+            hp = HeuristicProcessor.__new__(HeuristicProcessor)
+            hp.log = default_log
+            hp.found_indents = 0
+            for html, expected in (
+                ('<p class="style1">\xa0\xa0Hello</p>', ('class="style1"', 'style="text-indent:3%"')),
+                ('<p style="color:red" class="x">\xa0\xa0Hello</p>', ('class="x"', 'style="color:red; text-indent:3%"')),
+                ("<p style='color:red'>\xa0\xa0Hello</p>", ("style='color:red; text-indent:3%'",)),
+                ('<p style="color:red">\xa0\xa0Hello</p>', ('style="color:red; text-indent:3%"',)),
+                ('<p style="color:red;\n margin:0">\xa0\xa0Hello</p>', ('style="color:red;\n margin:0; text-indent:3%"',)),
+            ):
+                result = hp.fix_nbsp_indents(html)
+                for x in expected:
+                    self.assertIn(x, result, html)
+                self.assertTrue(result.endswith('>Hello</p>'), html)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicProcessorTest)

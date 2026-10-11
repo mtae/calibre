@@ -505,3 +505,7 @@ def rating_to_stars(value, allow_half_stars=False, star='★', half='⯨'):
     if allow_half_stars and r % 2:
         ans += half
     return ans
+
+
+def stars_to_rating(stars, star='★', half='⯨'):
+    return stars.count(star) * 2 + stars.count(half)

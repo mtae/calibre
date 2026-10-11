@@ -38,12 +38,17 @@ def ensure_unique_components(data):  # {{{
         cmap[tuple(components)].add(book_id)
         bid_map[book_id] = components
 
+    used = set(cmap)
     for book_ids in cmap.values():
         if len(book_ids) > 1:
-            for i, book_id in enumerate(sorted(book_ids)[1:]):
-                suffix = f' ({i + 1})'
+            for book_id in sorted(book_ids)[1:]:
                 components = bid_map[book_id]
-                components[-1] = components[-1] + suffix
+                n = 1
+                # the suffixed name must not collide with another book's name
+                while (*components[:-1], f'{components[-1]} ({n})') in used:
+                    n += 1
+                components[-1] = f'{components[-1]} ({n})'
+                used.add(tuple(components))
 
 
 # }}}
@@ -463,3 +468,25 @@ class Saver(QObject):
             msg = _('Failed to save some books to disk, click "Show details" for more information')
             d = warning_dialog
         d(self.parent(), _('Error while saving'), msg, det_msg=self.format_report(), show=True)
+
+
+def find_tests():
+    import unittest
+
+    class TestEnsureUniqueComponents(unittest.TestCase):
+        def test_ensure_unique_components(self):
+            data = {
+                1: (None, ['Author', 'X'], {'epub'}),
+                2: (None, ['Author', 'X'], {'epub'}),
+                3: (None, ['Author', 'X (1)'], {'epub'}),
+                4: (None, ['Author', 'Y'], {'epub'}),
+                5: (None, ['Author', 'Y'], {'epub'}),
+            }
+            ensure_unique_components(data)
+            paths = [tuple(v[1]) for v in data.values()]
+            self.assertEqual(len(set(paths)), len(paths), paths)
+            self.assertEqual(tuple(data[1][1]), ('Author', 'X'))
+            self.assertEqual(tuple(data[3][1]), ('Author', 'X (1)'))
+            self.assertEqual(tuple(data[5][1]), ('Author', 'Y (1)'))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestEnsureUniqueComponents)

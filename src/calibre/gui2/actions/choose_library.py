@@ -700,6 +700,9 @@ class ChooseLibraryAction(InterfaceAction):
         db.prefs.disable_setting = True
         if restore_database(db, self.gui):
             self.gui.library_moved(db.library_path)
+        else:  # the user canceled, the library is still open
+            db.prefs.disable_setting = False
+            m.start_metadata_backup()
 
     def check_library(self):
         from calibre.gui2.dialogs.check_library import CheckLibraryDialog, DBCheck

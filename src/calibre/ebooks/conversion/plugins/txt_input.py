@@ -155,6 +155,7 @@ class TXTInput(InputFormatPlugin):
         from calibre.ebooks.chardet import detect
         from calibre.ebooks.conversion.preprocess import Dehyphenator, DocAnalysis
         from calibre.ebooks.txt.processor import (
+            add_pygments_stylesheet,
             block_to_single_line,
             convert_basic,
             convert_markdown_with_metadata,
@@ -346,12 +347,15 @@ class TXTInput(InputFormatPlugin):
             input_mi = None
             if options.formatting_type == 'markdown':
                 log.debug('Running text through markdown conversion...')
+                md_extensions = [x.strip() for x in options.markdown_extensions.split(',') if x.strip()]
                 try:
-                    input_mi, html = convert_markdown_with_metadata(txt, extensions=[x.strip() for x in options.markdown_extensions.split(',') if x.strip()])
+                    input_mi, html = convert_markdown_with_metadata(txt, extensions=md_extensions)
                 except RuntimeError:
                     raise ValueError(
                         'This txt file has malformed markup, it cannot be converted by calibre. See https://daringfireball.net/projects/markdown/syntax'
                     )
+                if 'codehilite' in (x.lower() for x in md_extensions):
+                    html = add_pygments_stylesheet(html)
                 html = self.fix_resources(html, base_dir)
             elif options.formatting_type == 'textile':
                 log.debug('Running text through textile conversion...')
@@ -421,9 +425,11 @@ def find_tests():
             self.assertIsNone(txtz_formatting_for_extension('.txt'))
 
         def convert_to_html(self, name, text, *args):
-            # Convert text via the CLI to an EPUB and return the main XHTML file and the CSS
+            # Convert text with ebook-convert to an EPUB and return all the XHTML (in spine order) and all the CSS
+            import io
             import tempfile
             import zipfile
+            from contextlib import redirect_stderr, redirect_stdout
 
             from calibre.ebooks.conversion.cli import main
 
@@ -431,12 +437,9 @@ def find_tests():
                 src, dest = os.path.join(tdir, name), os.path.join(tdir, 'out.epub')
                 with open(src, 'w', encoding='utf-8') as f:
                     f.write(text)
-                import io
-                from contextlib import redirect_stderr, redirect_stdout
-
                 out = io.StringIO()
                 with redirect_stdout(out), redirect_stderr(out):
-                    ret = main(['ebook-convert', src, dest, '--language', 'en', '--title', 'T', '--authors', 'A', *args])
+                    ret = main(['ebook-convert', src, dest, '--language', 'en', '--title', 'T', '--authors', 'A', '--no-default-epub-cover', *args])
                 self.assertFalse(ret, out.getvalue())
                 with zipfile.ZipFile(dest) as zf:
                     names = zf.namelist()
@@ -444,61 +447,88 @@ def find_tests():
                     css = ''.join(zf.read(n).decode('utf-8') for n in names if n.endswith('.css'))
             return html, css
 
-        # Ragged prose (no blank lines, varying line lengths): detect_paragraph_type() says 'single'
-        RAGGED = (
-            'The first line of this ragged prose is quite a bit longer than the others are here\n'
-            'short\n'
-            'a medium sized line of text\n'
-            'x\n'
-            'Another reasonably long line that goes on for a while before it finally ends here\n'
-            'tiny\n'
-            'and one more of medium length\n'
-            'z\n'
-        ) * 3
-        MD_BLOCKS = (
-            '\n\n# Title\n\n'
-            '| h1 | h2 |\n|----|----|\n| a1 | b1 |\n| a2 | b2 |\n\n'
-            '```\ndef f():\n    x = 1\n\n    return x\n```\n\n'
-            '* item one\n* item two\n* item three\n\n'
+        # Prose with hard line breaks of varying lengths and no blank lines, followed by Markdown with a table, a bulleted
+        # list and an indented code block with a blank line in it. detect_paragraph_type() says 'single' for this, and
+        # detect_formatting_type() says 'markdown' (many headings).
+        MD_DOC = (
+            ''.join(
+                f'# Heading {i}\n\nSome prose line {i} that is a bit long to make the lines ragged in length\nshort\n' for i in range(7)
+            )
+            + '''
+| h1 | h2 |
+|----|----|
+| a1 | b1 |
+| a2 | b2 |
+
+* item one
+* item two
+* item three
+
+Code follows:
+
+    def f():
+        x = 1
+
+        return x
+
+End.
+'''
         )
 
-        def check_markdown_blocks(self, html):
-            self.assertIn('<table', html)
-            self.assertEqual(html.count('<tr'), 3, html)  # header + 2 rows, not 4 separate paragraphs
-            self.assertNotIn('| a1', html)
-            self.assertIn('<ul', html)
-            self.assertEqual(html.count('<li'), 3)
-            # the fence is an unrendered (fenced_code is off) inline code span but must hold the code on one run
-            # with fenced_code on it is a pre/code block with the blank line kept as a single newline
-            self.assertIn('x = 1', html)
+        def check_markdown_blocks(self, html, ctx=None):
+            self.assertIn('<table', html, ctx)
+            self.assertEqual(len(re.findall(r'<tr[ >]', html)), 3, ctx)  # header + 2 rows, not separate paragraphs
+            self.assertNotIn('| a1', html, ctx)
+            self.assertEqual(len(re.findall(r'<li[ >]', html)), 3, ctx)
+            self.assertNotRegex(html, r'<li[^>]*>\s*<p', ctx)  # a tight list, the rewrite made it loose
+            m = re.search(r'<pre[^>]*>(.*?)</pre>', html, re.S)
+            self.assertTrue(m, ctx)
+            code = re.sub(r'</?(code|span)[^>]*>', '', m.group(1))
+            # the blank line in the code block stays exactly one blank line
+            self.assertIn('def f():\n    x = 1\n\n    return x', code, ctx)
+
+        def test_detection_assumptions(self):
+            from calibre.ebooks.txt.processor import detect_formatting_type, detect_paragraph_type
+
+            self.assertEqual(detect_paragraph_type(self.MD_DOC), 'single')
+            self.assertEqual(detect_formatting_type(self.MD_DOC), 'markdown')
 
         def test_markdown_skips_paragraph_type(self):
-            text = self.RAGGED + self.MD_BLOCKS
-            for args, name in (
-                (('--formatting-type', 'markdown', '--markdown-extensions', 'tables,fenced_code'), 'book.txt'),  # given
-                ((), 'book.txt'),  # auto detected (# heading)
-                (('--markdown-extensions', 'tables,fenced_code'), 'book.md'),  # by extension (already worked)
+            for name, args in (
+                ('book.txt', ()),  # formatting auto detected as Markdown
+                ('book.txt', ('--formatting-type', 'markdown')),  # given
+                ('book.md', ()),  # by extension (this already worked)
             ):
-                html, css = self.convert_to_html(name, text, *args)
-                self.check_markdown_blocks(html)
-                m = re.search(r'<pre[^>]*>(.*?)</pre>', html, re.S)
-                self.assertTrue(m, (args, html))
-                # exactly one newline between lines: the blank line inside the code block is kept, not doubled
-                self.assertIn('x = 1\n\n', m.group(1).replace('<span>', ''), (args, m.group(1)))
-                self.assertNotIn('\n\n\n', m.group(1), args)
+                html, css = self.convert_to_html(name, self.MD_DOC, *args)
+                self.check_markdown_blocks(html, (name, args))
 
         def test_markdown_explicit_paragraph_type_honored(self):
             # An explicitly requested paragraph type is still applied to Markdown input, as before
-            html, css = self.convert_to_html(
-                'book.txt', self.RAGGED + '\n# Title\n', '--formatting-type', 'markdown', '--paragraph-type', 'single')
-            self.assertGreaterEqual(html.count('<p'), 20, html)
+            html, css = self.convert_to_html('book.txt', self.MD_DOC, '--formatting-type', 'markdown', '--paragraph-type', 'single')
+            self.assertNotIn('<table', html)
+            self.assertRegex(html, r'<li[^>]*>\s*<p')
 
         def test_non_markdown_paragraph_type_unchanged(self):
-            # Plain text still goes through paragraph type detection: every ragged line becomes its own paragraph
-            html, css = self.convert_to_html('book.txt', self.RAGGED, '--formatting-type', 'plain')
-            self.assertEqual(len(re.findall(r'<p[ >]', html)), 24, html)
-            html, css = self.convert_to_html('book.txt', self.RAGGED)  # auto: plain
-            self.assertEqual(len(re.findall(r'<p[ >]', html)), 24, html)
+            # Plain text still goes through paragraph type detection: with no blank lines each line becomes a paragraph
+            ragged = (
+                'The first line of this ragged prose is quite a bit longer than the others are here\nshort\n'
+                'a medium sized line of text\nx\nAnother reasonably long line that goes on for a while before it ends\ntiny\n'
+            ) * 4
+            for args in (('--formatting-type', 'plain'), ()):
+                html, css = self.convert_to_html('book.txt', ragged, *args)
+                self.assertEqual(len(re.findall(r'<p[ >]', html)), 24, (args, html))
+
+        def test_codehilite_stylesheet(self):
+            from calibre.ebooks.txt.processor import add_pygments_stylesheet
+
+            html = add_pygments_stylesheet('<html><head></head><body></body></html>')
+            self.assertRegex(html, r'(?s)<style[^>]*>.*\.codehilite .*</style></head>')
+            code = '\n\n    :::python\n    def f(): return 1\n'
+            args = ('--formatting-type', 'markdown')
+            hl, css = self.convert_to_html('book.txt', code, *args, '--markdown-extensions', 'codehilite')
+            self.assertIn('color:', css + hl)  # the Pygments style is applied to the highlighted spans
+            plain, css = self.convert_to_html('book.txt', code, *args)  # no codehilite: nothing is added
+            self.assertNotIn('color:', css + plain)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TXTInputTest)
 

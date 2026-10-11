@@ -125,6 +125,19 @@ def create_markdown_object(extensions=DEFAULT_MD_EXTENSIONS):
     return md
 
 
+def add_pygments_stylesheet(html):
+    """
+    The codehilite extension marks up code with Pygments CSS classes, but emits no stylesheet for them, so
+    without this the classes have no effect. Add the Pygments default style, scoped to .codehilite, to the head.
+    """
+    try:
+        from pygments.formatters import HtmlFormatter
+    except ImportError:
+        return html
+    css = HtmlFormatter().get_style_defs('.codehilite')
+    return html.replace('</head>', f'<style type="text/css">\n{css}\n</style></head>', 1)
+
+
 def convert_markdown(txt, title='', extensions=DEFAULT_MD_EXTENSIONS):
     md = create_markdown_object(extensions)
     return HTML_TEMPLATE % (title, md.convert(txt))

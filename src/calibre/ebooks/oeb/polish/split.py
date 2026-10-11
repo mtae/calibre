@@ -402,6 +402,7 @@ def merge_html(container, names, master, insert_page_breaks=False):
             if val in seen_anchors:
                 nval = unique_anchor(seen_anchors, val)
                 elem.set('id', nval)
+                seen_anchors.add(nval)
                 amap[val] = nval
             else:
                 seen_anchors.add(val)

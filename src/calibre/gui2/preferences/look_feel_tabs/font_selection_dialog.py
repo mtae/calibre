@@ -92,17 +92,11 @@ class FontSelectionDialog(QDialog):
         all_families = QFontDatabase.families()
 
         # Filter for smoothly scalable fonts
-        scalable_families = []
-        idx = i = 0
-        for family in all_families:
-            if QFontDatabase.isSmoothlyScalable(family):
-                scalable_families.append(family)
-                if family == self.initial_family:
-                    idx = i
-                i += 1
-
+        scalable_families = [f for f in all_families if QFontDatabase.isSmoothlyScalable(f)]
         scalable_families.sort()
         self.families_list.addItems(scalable_families)
+        # Must be computed after sorting as the list order differs from Qt's order
+        idx = scalable_families.index(self.initial_family) if self.initial_family in scalable_families else 0
 
         # Select the initial item if available
         if self.families_list.count() > 0:

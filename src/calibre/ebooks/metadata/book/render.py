@@ -417,7 +417,7 @@ def mi_to_html(
             # treatment below with a click to search link (which isn't
             # too bad), and a right-click 'Delete' option to delete
             # the title (which is bad).
-            val = mi.format_field(field)[-1]
+            val = p(mi.format_field(field)[-1])
             ans.append((field, row % (name, val)))
         else:
             val = unescaped_val = mi.format_field(field)[-1]
@@ -563,3 +563,18 @@ def mi_to_html(
         margin = 'left' if rtl else 'right'
         rans += f'margin-{margin}: auto; '
     return '{}">{}</table>'.format(rans, '\n'.join(ans)), comment_fields
+
+
+def find_tests():
+    import unittest
+
+    from calibre.ebooks.metadata.book.base import Metadata
+
+    class TestMiToHtml(unittest.TestCase):
+        def test_title_is_escaped(self):
+            mi = Metadata('A <b>x</b> & y', ['Author'])
+            html = mi_to_html(mi, field_list=[('title', True)])[0]
+            self.assertIn('A &lt;b&gt;x&lt;/b&gt; &amp; y', html)
+            self.assertNotIn('<b>x</b>', html)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestMiToHtml)

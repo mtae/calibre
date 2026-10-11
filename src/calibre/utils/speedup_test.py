@@ -144,6 +144,7 @@ if sys.getrefcount(s) != before:
     raise SystemExit(1)
 print('OK')
 '''
+        from calibre.utils.icu_test import run_in_subprocess
         p = run_in_subprocess(code)
         self.ae((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
 

@@ -1352,6 +1352,23 @@ class WritingTest(BaseTest):
                 self.assertEqual([], seen)
         self.assertEqual(1, len(seen))
         self.assertIn(1, seen[0].fields['tags'][0])
+        # A nested change that fails and is caught by its parent has rolled itself back: nothing it registered may
+        # be run or reported when the parent commits
+        seen.clear()
+        ran = []
+        with cache.write_lock:
+            with cache._change() as outer:
+                try:
+                    with cache._change() as inner:
+                        inner.touch('tags', (2,))
+                        inner.after_commit(lambda: ran.append('child'))
+                        raise ValueError('child failed')
+                except ValueError:
+                    pass
+                outer.after_commit(lambda: ran.append('parent'))
+        self.assertEqual(['parent'], ran, 'after_commit callback of a failed nested change ran')
+        self.assertEqual(1, len(seen))
+        self.assertEqual({}, seen[0].fields, 'record reports fields of a failed nested change')
         del old
 
     # }}}

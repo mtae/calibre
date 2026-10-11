@@ -2004,7 +2004,10 @@ class Cache:
             finally:
                 self._active_change = parent
                 if parent is not None:
-                    parent.merge(record)
+                    # The failed change has rolled itself back. A parent that catches the error and commits must not
+                    # run or report what the failed change registered, so only the tables are passed on (they are
+                    # re-read again if the parent fails as well).
+                    parent.tables.update(record.tables)
             raise
         self._active_change = parent
         if parent is not None:

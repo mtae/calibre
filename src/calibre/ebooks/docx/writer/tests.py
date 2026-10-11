@@ -362,6 +362,10 @@ class TestTables(unittest.TestCase):
             self.expand([('A', 2), 'B'], ['C'], ['D', 'E'], ['F', 'G']),
             [['A', 'B'], ['~A', 'C'], ['D', 'E'], ['F', 'G']])
 
+    def test_rowspan_above_empty_row(self):
+        rows = self.expand(['A', ('B', 2)], [])
+        self.assertEqual(rows[1], ['~B', '~B'])
+
 
 def find_tests():
     loader = unittest.defaultTestLoader

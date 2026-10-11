@@ -771,6 +771,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.conversion.plugins.txt_input import find_tests
 
         a(find_tests())
+        from calibre.ebooks.comic.input import find_tests
+
+        a(find_tests())
         from calibre.ebooks.conversion.plugins.fb2_input import find_tests
 
         a(find_tests())

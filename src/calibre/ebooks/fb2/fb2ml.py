@@ -14,7 +14,7 @@ from lxml import etree
 
 from calibre import prepare_string_for_xml
 from calibre.constants import __appname__, __version__
-from calibre.ebooks.oeb.base import urlnormalize
+from calibre.ebooks.oeb.base import OEB_DOCS, urlnormalize, xpath
 from calibre.utils.img import save_cover_data_to
 from calibre.utils.localization import lang_as_iso639_1
 from calibre.utils.xml_parse import safe_xml_fromstring
@@ -262,17 +262,19 @@ class FB2MLizer:
                 page_name = 'cover'
 
             if page_name:
-                cover_item = self.oeb_book.manifest.hrefs[self.oeb_book.guide[page_name].href]
+                cover_item = self.oeb_book.guide[page_name].item
                 # Get the first image in the page
-                for img in cover_item.xpath('//img'):
-                    cover_href = cover_item.abshref(img.get('src'))
-                    break
+                if cover_item is not None and cover_item.media_type in OEB_DOCS:
+                    for img in xpath(cover_item.data, '//h:img'):
+                        cover_href = cover_item.abshref(img.get('src'))
+                        break
 
         if cover_href:
             # Only write the image tag if it is in the manifest.
             if cover_href in self.oeb_book.manifest.hrefs and cover_href not in self.image_hrefs:
                 self.image_hrefs[cover_href] = f'img_{len(self.image_hrefs)}'
-            return f'<coverpage><image l:href="#{self.image_hrefs[cover_href]}"/></coverpage>'
+            if cover_href in self.image_hrefs:
+                return f'<coverpage><image l:href="#{self.image_hrefs[cover_href]}"/></coverpage>'
 
         return ''
 
@@ -571,3 +573,30 @@ class FB2MLizer:
                 self.in_p = False
 
         return text
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    from calibre.ebooks.oeb.base import XHTML_MIME, XHTML_NS, OEBBook
+    from calibre.utils.logging import default_log
+
+    class FB2MLTest(unittest.TestCase):
+        def test_cover_from_guide_titlepage(self):
+            for guide_href, src, has_cover in (
+                ('cover.html', 'c.jpg', True), ('cover.html#top', 'c.jpg', True),
+                ('cover.html', 'http://example.com/c.jpg', False), ('cover.html', 'missing.jpg', False),
+            ):
+                oeb = OEBBook(default_log)
+                oeb.metadata.add('title', 'T')
+                oeb.metadata.add('language', 'en')
+                page = safe_xml_fromstring(f'<html xmlns="{XHTML_NS}"><head><title>c</title></head><body><img src="{src}"/></body></html>')
+                oeb.manifest.add('page', 'cover.html', XHTML_MIME, data=page)
+                oeb.manifest.add('img', 'c.jpg', 'image/jpeg', data=b'data')
+                oeb.guide.add('titlepage', 'Title Page', guide_href)
+                mlizer = FB2MLizer(default_log)
+                mlizer.oeb_book, mlizer.opts = oeb, SimpleNamespace(fb2_genre='antique')
+                self.assertEqual('<coverpage>' in mlizer.fb2_header(), has_cover, (guide_href, src))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(FB2MLTest)

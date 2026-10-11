@@ -249,7 +249,10 @@ class TextileMLizer(OEB2HTML):
 
         # Soft scene breaks.
         if 'margin-top' in style.cssdict() and style['margin-top'] != 'auto':
-            ems = min(int(round(float(style.marginTop) / style.fontSize) - 1), self.MAX_EM)
+            try:
+                ems = min(int(round(float(style.marginTop) / style.fontSize) - 1), self.MAX_EM)
+            except Exception:  # e.g. calc() margins or a zero font size
+                ems = 0
             if ems >= 1:
                 text.append('\n\n\xa0' * ems)
 
@@ -508,7 +511,10 @@ class TextileMLizer(OEB2HTML):
 
         # Soft scene breaks.
         if 'margin-bottom' in style.cssdict() and style['margin-bottom'] != 'auto':
-            ems = min(round((float(style.marginBottom) / style.fontSize) - 1), self.MAX_EM)
+            try:
+                ems = min(round((float(style.marginBottom) / style.fontSize) - 1), self.MAX_EM)
+            except Exception:  # e.g. calc() margins or a zero font size
+                ems = 0
             if ems >= 1:
                 text.append('\n\n\xa0' * ems)
 

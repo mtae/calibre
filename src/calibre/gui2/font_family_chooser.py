@@ -62,6 +62,7 @@ def add_fonts(parent):
     families = sorted(families)
 
     dest = os.path.join(config_dir, 'fonts')
+    os.makedirs(dest, exist_ok=True)
     for f in files:
         shutil.copyfile(f, os.path.join(dest, os.path.basename(f)))
 

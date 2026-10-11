@@ -539,7 +539,7 @@ class LiveCSS(QWidget):
         specificity.extend((sheet_index, tuple(rule_address)))
         properties = []
         for prop in rule['properties']:
-            important = 1 if prop[-1] == 'important' else 0
+            important = 1 if prop[2] == 'important' else 0
             p = Property(prop, [ancestor_specificity] + [important] + specificity)
             properties.append(p)
             if p.specificity > maximum_specificities.get(p.name, lowest_specificity):
@@ -596,3 +596,25 @@ class LiveCSS(QWidget):
             editor.goto_css_rule(data['rule_address'])
         elif data['type'] == 'elem':
             editor.goto_css_rule(data['rule_address'], sourceline_address=data['sourceline_address'])
+
+
+def find_tests():
+    import unittest
+
+    class TestLiveCSS(unittest.TestCase):
+        def test_important_specificity(self):
+            def rule(selector, address, value, priority):
+                return {
+                    'selector': selector, 'sheet_index': 0, 'rule_address': [address], 'href': None,
+                    'properties': [['margin', value, priority, None]],
+                }
+
+            important, normal = rule('p', 0, '0', 'important'), rule('p.x', 1, '5px', '')
+            maximum_specificities = {}
+            for r in (important, normal):
+                LiveCSS.process_rule(None, r, 0, maximum_specificities)
+            imp, nrm = important['properties'][0], normal['properties'][0]
+            self.assertGreater(imp.specificity, nrm.specificity)
+            self.assertEqual(maximum_specificities['margin'], imp.specificity)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestLiveCSS)

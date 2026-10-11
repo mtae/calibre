@@ -1413,7 +1413,7 @@ class BasicNewsRecipe(Recipe):
                 except NotImplementedError:
                     url = article.url
                 except Exception:
-                    self.log.exception('Failed to find print version for: ' + article.url)
+                    self.log.exception(f'Failed to find print version for: {article.url}')
                     url = None
                 if not url:
                     continue

@@ -330,7 +330,7 @@ class TextileMLizer(OEB2HTML):
         elif tag == 'pre':
             self.in_pre = True
             text.append('\npre. ')
-            tags.append('pre\n')
+            tags.append('pre')
         elif tag == 'a':
             if self.opts.keep_links:
                 if 'href' in attribs:
@@ -479,6 +479,8 @@ class TextileMLizer(OEB2HTML):
             if t in ('pre', 'ul', 'ol', 'li', 'table'):
                 if t == 'pre':
                     self.in_pre = False
+                    # A blank line ends a pre. block
+                    text.append('\n')
                 elif t in ('ul', 'ol'):
                     if self.list:
                         self.list.pop()

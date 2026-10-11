@@ -783,6 +783,15 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.conversion.regex_safety_test import find_tests
 
         a(find_tests())
+        from calibre.ebooks.comic.input import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.plugins.fb2_input import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.oeb.transforms.split import find_tests
+
+        a(find_tests())
         from calibre.ebooks.metadata.rtf import find_tests
 
         a(find_tests())
@@ -814,6 +823,9 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.ebooks.pdf.reflow_test import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pdf.render.serialize import find_tests
 
         a(find_tests())
         from calibre.spell.dictionary import find_tests

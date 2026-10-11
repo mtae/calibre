@@ -168,23 +168,57 @@ class FB2Input(InputFormatPlugin):
     def extract_embedded_content(self, doc):
         from calibre import guess_extension, sanitize_file_name
         from calibre.ebooks.fb2 import base64_decode
+        from calibre.utils.imghdr import what
 
         self.image_map = {}
         for elem in doc.xpath('./*'):
             if elem.text and 'binary' in elem.tag and elem.get('id', ''):
                 ct = elem.get('content-type', '').lower()
                 fname = sanitize_file_name(elem.get('id'))
-                if ct.startswith('image/'):
-                    ext = guess_extension(ct)
-                    if ext:
-                        fname += ext
-                        fname = sanitize_file_name(fname)
-                        self.image_map[elem.get('id')] = fname
                 raw = elem.text.strip()
                 try:
                     data = base64_decode(raw)
                 except TypeError:
                     self.log.exception('Binary data with id={} is corrupted, ignoring'.format(elem.get('id')))
-                else:
-                    with open(fname, 'wb') as f:
-                        f.write(data)
+                    continue
+                if ct.startswith('image/'):
+                    ext = guess_extension(ct)
+                    if not ext:
+                        # Non-standard content types such as image/jpg
+                        fmt = what(None, data)
+                        ext = fmt and '.' + fmt
+                    if ext:
+                        fname += ext
+                        fname = sanitize_file_name(fname)
+                        self.image_map[elem.get('id')] = fname
+                with open(fname, 'wb') as f:
+                    f.write(data)
+
+
+def find_tests():
+    import base64
+    import unittest
+
+    from calibre import CurrentDir
+    from calibre.ptempfile import TemporaryDirectory
+    from calibre.utils.xml_parse import safe_xml_fromstring
+
+    png = base64.b64encode(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')).decode()
+
+    class FB2InputTest(unittest.TestCase):
+        def test_embedded_image_with_nonstandard_content_type(self):
+            for ct in ('image/png', 'image/x-png', 'image/jpg'):
+                doc = safe_xml_fromstring(f'<FictionBook xmlns="{FB2NS}"><binary id="img1" content-type="{ct}">{png}</binary></FictionBook>')
+                with TemporaryDirectory() as tdir, CurrentDir(tdir):
+                    plugin = FB2Input(None)
+                    plugin.extract_embedded_content(doc)
+                    self.assertEqual(plugin.image_map, {'img1': 'img1.png'}, ct)
+                    self.assertTrue(os.path.exists('img1.png'), ct)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(FB2InputTest)
+
+
+if __name__ == '__main__':
+    from calibre.utils.run_tests import run_tests
+
+    run_tests(find_tests)

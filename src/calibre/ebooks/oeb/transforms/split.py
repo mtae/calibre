@@ -376,6 +376,8 @@ class FlowSplitter:
             else:
                 ans.append(buf)
                 buf = part
+        if buf:
+            ans.append(buf)
         return ans
 
     def split_to_size(self, tree):
@@ -536,3 +538,28 @@ class FlowSplitter:
                     page.href = nhref
 
         self.oeb.manifest.remove(self.item)
+
+
+def find_tests():
+    import unittest
+
+    from calibre.utils.logging import Log
+
+    class SplitTest(unittest.TestCase):
+        def test_split_text_keeps_all_text(self):
+            splitter = FlowSplitter.__new__(FlowSplitter)
+            splitter.log = Log()
+            paras = [f'paragraph {i} ' + 'x' * 90 for i in range(100)]
+            frags = splitter.split_text('\n\n'.join(paras), None, 1000)
+            self.assertGreater(len(frags), 1)
+            joined = '\n\n'.join(frags)
+            for p in paras:
+                self.assertIn(p, joined)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(SplitTest)
+
+
+if __name__ == '__main__':
+    from calibre.utils.run_tests import run_tests
+
+    run_tests(find_tests)

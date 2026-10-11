@@ -218,6 +218,37 @@ class LoopTest(BaseTest):
                 subject = dict(x[0] for x in cert['subject'])
                 self.ae(subject['commonName'], address)
 
+    def test_ssl_close_needed(self):
+        "Test that a connection that fails in the SSL buffer drain is the one that is closed"
+        from types import SimpleNamespace as NS
+
+        from calibre.srv.loop import READ, ServerLoop
+
+        class Conn:
+            wait_for = READ
+            last_activity = 1e18
+            read_buffer = NS(has_data=False)
+
+            def __init__(self, name, ready):
+                self.name, self.ready = name, ready
+
+            def drain_ssl_buffer(self):
+                pass
+
+        loop = object.__new__(ServerLoop)
+        loop.opts = NS(timeout=60)
+        loop.ssl_context = object()
+        loop.connection_map = {10: Conn('dead', False), 11: Conn('live', True)}
+        closed = []
+        loop.close = lambda s, conn: closed.append((s, conn.name))
+
+        def no_socket():
+            raise ValueError('stop tick after the close calls')
+        loop.socket = NS(fileno=no_socket)
+        loop.log = NS(error=lambda *a: None)
+        loop.tick()
+        self.ae(closed, [(10, 'dead')])
+
     @skipIf(not has_preactivated_support, 'pre_activated_socket not available')
     def test_socket_activation(self):
         "Test socket activation"

@@ -8,6 +8,7 @@
 #include <datetime.h>
 #include <errno.h>
 
+#include <limits.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -36,6 +37,40 @@ typedef unsigned __int8 uint8_t;
 #else
 #include <unistd.h>
 #endif
+
+// Argument conversion helpers for METH_FASTCALL functions that behave like the
+// "s" and "i" formats of PyArg_ParseTuple() that these functions used to use.
+
+// "s": a str without embedded NUL characters (PyUnicode_AsUTF8() alone would
+// silently truncate at the first NUL when the result is used as a C string)
+static const char *
+str_arg_as_utf8(PyObject *obj) {
+    Py_ssize_t sz = 0;
+    const char *ans = PyUnicode_AsUTF8AndSize(obj, &sz);
+    if (ans == NULL) return NULL;
+    if ((size_t)sz != strlen(ans)) {
+        PyErr_SetString(PyExc_ValueError, "embedded null character");
+        return NULL;
+    }
+    return ans;
+}
+
+// "i": an int that must fit in a C int. Returns 0 on success and -1 with an exception set on failure
+static int
+int_arg(PyObject *obj, int *out) {
+    long v = PyLong_AsLong(obj);
+    if (v == -1 && PyErr_Occurred()) return -1;
+    if (v > INT_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "signed integer is greater than maximum");
+        return -1;
+    }
+    if (v < INT_MIN) {
+        PyErr_SetString(PyExc_OverflowError, "signed integer is less than minimum");
+        return -1;
+    }
+    *out = (int)v;
+    return 0;
+}
 
 static PyObject *
 barename(PyObject *self, PyObject *tag) {
@@ -76,7 +111,7 @@ speedup_parse_date(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         PyErr_SetString(PyExc_TypeError, "parse_date() takes exactly 1 argument");
         return NULL;
     }
-    raw = PyUnicode_AsUTF8(args[0]);
+    raw = str_arg_as_utf8(args[0]);
     if (!raw) return NULL;
     while ((*raw == ' ' || *raw == '\t' || *raw == '\n' || *raw == '\r' || *raw == '\f' || *raw == '\v') && *raw != 0) raw++;
     len = strlen(raw);
@@ -172,7 +207,7 @@ speedup_detach(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         PyErr_SetString(PyExc_TypeError, "detach() takes exactly 1 argument");
         return NULL;
     }
-    devnull = PyUnicode_AsUTF8(args[0]);
+    devnull = str_arg_as_utf8(args[0]);
     if (!devnull) return NULL;
     if (freopen(devnull, "r", stdin) == NULL) return PyErr_SetFromErrnoWithFilename(PyExc_OSError, devnull);
     if (freopen(devnull, "w", stdout) == NULL) return PyErr_SetFromErrnoWithFilename(PyExc_OSError, devnull);
@@ -393,6 +428,11 @@ utf8_decode(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs > 1) {
         unsigned long val = PyLong_AsUnsignedLong(args[1]);
         if (val == (unsigned long)-1 && PyErr_Occurred()) return NULL;
+        // The decoder table has states 0 to 8, anything else would index past its end
+        if (val > 8) {
+            PyErr_SetString(PyExc_ValueError, "invalid UTF-8 decoder state");
+            return NULL;
+        }
         state = (uint32_t)val;
     }
     if (nargs > 2) {
@@ -482,7 +522,7 @@ speedup_iso_8601(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         PyErr_SetString(PyExc_TypeError, "parse_iso8601() takes exactly 1 argument");
         return NULL;
     }
-    str = PyUnicode_AsUTF8(args[0]);
+    str = str_arg_as_utf8(args[0]);
     if (!str) return NULL;
     c = str;
 
@@ -606,7 +646,7 @@ set_thread_name(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         PyErr_SetString(PyExc_TypeError, "set_thread_name() takes exactly 1 argument");
         return NULL;
     }
-    name = PyUnicode_AsUTF8(args[0]);
+    name = str_arg_as_utf8(args[0]);
     if (!name) return NULL;
     while (1) {
         errno = 0;
@@ -884,8 +924,7 @@ pread_all(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         PyErr_SetString(PyExc_TypeError, "pread_all() takes 2 or 3 arguments");
         return NULL;
     }
-    fd = (int)PyLong_AsLong(args[0]);
-    if (fd == -1 && PyErr_Occurred()) return NULL;
+    if (int_arg(args[0], &fd) != 0) return NULL;
     n = PyLong_AsUnsignedLongLong(args[1]);
     if (n == (unsigned long long)-1 && PyErr_Occurred()) return NULL;
     if (nargs > 2) {

@@ -118,6 +118,10 @@ print('OK')
         self.ae((text2, state2), ('\U0001f431', 0))
         with self.assertRaises(ValueError):
             speedup.utf8_decode(b'\xff')
+        self.ae(speedup.utf8_decode(b'a', 0)[0], 'a')
+        for bad_state in (9, 100, 2**32 - 1, 2**32, 2**64 - 1):  # the decoder has states 0 to 8, a larger one indexes past its table
+            with self.assertRaises(ValueError, msg=f'state={bad_state}'):
+                speedup.utf8_decode(b'a', bad_state)
 
 
 def find_tests():

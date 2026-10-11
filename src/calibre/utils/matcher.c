@@ -23,53 +23,6 @@
 
 // Algorithm to sort items by subsequence score {{{
 typedef struct {
-    double score;
-    int32_t *positions;
-} MemoryItem;
-
-static MemoryItem ***
-alloc_memory(int32_t needle_len, int32_t max_haystack_len) {
-    MemoryItem ***ans = NULL, **d1 = NULL, *d2 = NULL;
-    size_t num = (size_t)max_haystack_len * (size_t)max_haystack_len * needle_len;
-    size_t position_sz = needle_len * sizeof(int32_t);
-    size_t sz = (num * (sizeof(MemoryItem) + position_sz)) + (max_haystack_len * sizeof(MemoryItem **)) + (needle_len * sizeof(MemoryItem *));
-    int32_t hidx, nidx, last_idx, i, j;
-    char *base = NULL;
-
-    ans = (MemoryItem ***)calloc(sz, 1);
-    if (ans != NULL) {
-        d1 = (MemoryItem **)(ans + max_haystack_len);
-        d2 = (MemoryItem *)(d1 + max_haystack_len * needle_len);
-        for (i = 0; i < max_haystack_len; i++) {
-            ans[i] = d1 + i * needle_len;
-            for (j = 0; j < needle_len; j++) d1[i * needle_len + j] = d2 + j;
-        }
-
-        base = ((char *)ans) + (sizeof(MemoryItem **) * max_haystack_len) + (sizeof(MemoryItem *) * needle_len) + (sizeof(MemoryItem) * max_haystack_len);
-
-        for (hidx = 0; hidx < max_haystack_len; hidx++) {
-            for (nidx = 0; nidx < needle_len; nidx++) {
-                for (last_idx = 0; last_idx < max_haystack_len; last_idx++) {
-                    ans[hidx][nidx][last_idx].positions = (int32_t *)base;
-                    base += position_sz;
-                }
-            }
-        }
-    }
-    return ans;
-}
-
-static void
-clear_memory(MemoryItem ***mem, int32_t needle_len, int32_t max_haystack_len) {
-    int32_t hidx, nidx, last_idx;
-    for (hidx = 0; hidx < max_haystack_len; hidx++) {
-        for (nidx = 0; nidx < needle_len; nidx++) {
-            for (last_idx = 0; last_idx < max_haystack_len; last_idx++) { mem[hidx][nidx][last_idx].score = DBL_MAX; }
-        }
-    }
-}
-
-typedef struct {
     int32_t hidx;
     int32_t nidx;
     int32_t last_idx;
@@ -135,7 +88,6 @@ typedef struct {
     UChar *needle;
     int32_t needle_len;
     double max_score_per_char;
-    MemoryItem ***memo;
     UChar *level1;
     UChar *level2;
     UChar *level3;
@@ -194,7 +146,6 @@ process_item(MatchInfo *m, Stack *stack, int32_t *final_positions, UStringSearch
     UChar32 hc, lc;
     double final_score = 0.0, score = 0.0, score_for_char = 0.0;
     int32_t pos, i, j, hidx, nidx, last_idx, distance, *positions = final_positions + m->needle_len;
-    MemoryItem mem = {0};
     UStringSearch *search = NULL;
     UErrorCode status = U_ZERO_ERROR;
 
@@ -202,48 +153,38 @@ process_item(MatchInfo *m, Stack *stack, int32_t *final_positions, UStringSearch
 
     while (stack->pos >= 0) {
         stack_pop(stack, &hidx, &nidx, &last_idx, &score, positions);
-        mem = m->memo[hidx][nidx][last_idx];
-        if (mem.score == DBL_MAX) {
-            // No memoized result, calculate the score
-            for (i = nidx; i < m->needle_len;) {
-                nidx = i;
-                U16_FWD_1(m->needle, i, m->needle_len); // i now points to next char in needle
-                search = searches[nidx];
-                if (search == NULL || m->haystack_len - hidx < m->needle_len - nidx) {
-                    score = 0.0;
-                    break;
-                }
-                status = U_ZERO_ERROR; // We ignore any errors as we already know that hidx is correct
-                usearch_setOffset(search, hidx, &status);
-                status = U_ZERO_ERROR;
-                pos = usearch_next(search, &status);
-                if (pos == USEARCH_DONE) {
-                    score = 0.0;
-                    break;
-                } // No matches found
-                distance = u_countChar32(m->haystack + last_idx, pos - last_idx);
-                if (distance <= 1) score_for_char = m->max_score_per_char;
-                else {
-                    U16_GET(m->haystack, 0, pos, m->haystack_len, hc);
-                    j = pos;
-                    U16_PREV(m->haystack, 0, j, lc); // lc is the prev character
-                    score_for_char = calc_score_for_char(m, lc, hc, distance);
-                }
+        for (i = nidx; i < m->needle_len;) {
+            nidx = i;
+            U16_FWD_1(m->needle, i, m->needle_len); // i now points to next char in needle
+            search = searches[nidx];
+            if (search == NULL || m->haystack_len - hidx < m->needle_len - nidx) {
+                score = 0.0;
+                break;
+            }
+            status = U_ZERO_ERROR; // We ignore any errors as we already know that hidx is correct
+            usearch_setOffset(search, hidx, &status);
+            status = U_ZERO_ERROR;
+            pos = usearch_next(search, &status);
+            if (pos == USEARCH_DONE) {
+                score = 0.0;
+                break;
+            } // No matches found
+            distance = u_countChar32(m->haystack + last_idx, pos - last_idx);
+            if (distance <= 1) score_for_char = m->max_score_per_char;
+            else {
+                U16_GET(m->haystack, 0, pos, m->haystack_len, hc);
                 j = pos;
-                U16_NEXT(m->haystack, j, m->haystack_len, hc);
-                hidx = j;
-                if (m->haystack_len - hidx >= m->needle_len - nidx) stack_push(stack, hidx, nidx, last_idx, score, positions);
-                last_idx = pos;
-                positions[nidx] = pos;
-                score += score_for_char;
-            } // for(i) iterate over needle
-            mem.score = score;
-            memcpy(mem.positions, positions, sizeof(*positions) * m->needle_len);
-
-        } else {
-            score = mem.score;
-            memcpy(positions, mem.positions, sizeof(*positions) * m->needle_len);
-        }
+                U16_PREV(m->haystack, 0, j, lc); // lc is the prev character
+                score_for_char = calc_score_for_char(m, lc, hc, distance);
+            }
+            j = pos;
+            U16_NEXT(m->haystack, j, m->haystack_len, hc);
+            hidx = j;
+            if (m->haystack_len - hidx >= m->needle_len - nidx) stack_push(stack, hidx, nidx, last_idx, score, positions);
+            last_idx = pos;
+            positions[nidx] = pos;
+            score += score_for_char;
+        } // for(i) iterate over needle
         // We have calculated the score for this hidx, nidx, last_idx combination, update final_score and final_positions, if needed
         if (score > final_score) {
             final_score = score;
@@ -304,7 +245,6 @@ match(
     int32_t r = 0, *positions = NULL;
     MatchInfo *matches = NULL;
     bool ok = false;
-    MemoryItem ***memo = NULL;
     int32_t needle_len = u_strlen(needle);
     UStringSearch **searches = NULL;
 
@@ -341,8 +281,7 @@ match(
     }
 
     alloc_stack(&stack, needle_len, maxhl);
-    memo = alloc_memory(needle_len, maxhl);
-    if (stack.items == NULL || memo == NULL) {
+    if (stack.items == NULL) {
         *err = U_MEMORY_ALLOCATION_ERROR;
         goto end;
     }
@@ -356,10 +295,8 @@ match(
         }
         for (r = 0; r < needle_len; r++) positions[r] = -1;
         stack_clear(&stack);
-        clear_memory(memo, needle_len, matches[i].haystack_len);
         free_searches(searches, needle_len);
         if (!create_searches(searches, matches[i].haystack, matches[i].haystack_len, needle, needle_len, collator, err)) goto end;
-        matches[i].memo = memo;
         match_results[i].score = process_item(&matches[i], &stack, positions, searches);
         convert_positions(positions, final_positions + i * needle_char_len, matches[i].haystack, needle_char_len, needle_len, match_results[i].score);
     }
@@ -369,7 +306,6 @@ end:
     nullfree(positions);
     nullfree(stack.items);
     nullfree(matches);
-    nullfree(memo);
     if (searches != NULL) {
         free_searches(searches, needle_len);
         nullfree(searches);

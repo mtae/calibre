@@ -428,6 +428,11 @@ utf8_decode(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs > 1) {
         unsigned long val = PyLong_AsUnsignedLong(args[1]);
         if (val == (unsigned long)-1 && PyErr_Occurred()) return NULL;
+        // The decoder table has states 0 to 8, anything else would index past its end
+        if (val > 8) {
+            PyErr_SetString(PyExc_ValueError, "invalid UTF-8 decoder state");
+            return NULL;
+        }
         state = (uint32_t)val;
     }
     if (nargs > 2) {

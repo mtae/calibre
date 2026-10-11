@@ -11,7 +11,7 @@ from qt.core import QAbstractItemModel, QFont, QIcon, QMimeData, QModelIndex, QO
 from calibre.constants import config_dir
 from calibre.db.categories import Tag, category_display_order
 from calibre.db.constants import TEMPLATE_ICON_INDICATOR
-from calibre.ebooks.metadata import rating_to_stars
+from calibre.ebooks.metadata import rating_to_stars, stars_to_rating
 from calibre.gui2 import config, error_dialog, file_icon_provider, gprefs, question_dialog
 from calibre.gui2.dialogs.confirm_delete import confirm
 from calibre.library.field_metadata import category_icon_map
@@ -1549,7 +1549,7 @@ class TagsModel(QAbstractItemModel):  # {{{
                 mi.authors = [val]
                 set_authors = True
             elif fm['datatype'] == 'rating':
-                mi.set(key, len(val) * 2)
+                mi.set(key, stars_to_rating(val))
             elif fm['datatype'] == 'series':
                 series_index = hd_db.new_api.get_next_series_num_for(val, field=key)
                 if fm['is_custom']:

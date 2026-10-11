@@ -903,6 +903,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.preferences.emailp import find_tests
 
         a(find_tests())
+        from calibre.gui2.store.stores.ebookpoint_plugin import find_tests
+
+        a(find_tests())
         if iswindows:
             from calibre.utils.windows.wintest import find_tests
 

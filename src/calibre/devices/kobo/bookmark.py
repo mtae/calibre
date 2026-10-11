@@ -1,6 +1,7 @@
 # License: GPLv3 Copyright: 2011, Timothy Legge <timlegge@gmail.com> and Kovid Goyal <kovid@kovidgoyal.net>
 
 import os
+from collections import defaultdict
 
 from calibre.prints import debug_print
 
@@ -70,8 +71,8 @@ class Bookmark:  # {{{
 
         cursor.execute(bookmark_query, book_query_values)
 
-        previous_chapter = 0
-        bm_count = 0
+        # Rows for the same chapter are not necessarily adjacent, so count per chapter
+        bm_counts = defaultdict(int)
         for row in cursor:
             current_chapter = row['VolumeIndex'] if row['VolumeIndex'] is not None else 0
             chapter_title = row['Title']
@@ -100,11 +101,6 @@ class Bookmark:  # {{{
                     chapter_title = ''
                     current_chapter = 0
 
-            if previous_chapter == current_chapter:
-                bm_count = bm_count + 1
-            else:
-                bm_count = 0
-
             text = row['Text']
             annotation = row['Annotation']
 
@@ -120,7 +116,8 @@ class Bookmark:  # {{{
             else:
                 e_type = 'Unknown annotation type'
 
-            note_id = current_chapter * 1000 + bm_count
+            note_id = current_chapter * 100000 + bm_counts[current_chapter]
+            bm_counts[current_chapter] += 1
 
             # book_title = row[8]
             chapter_progress = min(round(float(100 * row['ChapterProgress']), 2), 100)
@@ -134,7 +131,6 @@ class Bookmark:  # {{{
                 'chapter_title': chapter_title,
                 'chapter_progress': chapter_progress,
             }
-            previous_chapter = current_chapter
             # debug_print("e_type:", e_type, '\t', 'loc: ', note_id, 'text: ', text,
             # 'annotation: ', annotation, 'chapter_title: ', chapter_title,
             # 'chapter_progress: ', chapter_progress, 'date: ')

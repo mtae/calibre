@@ -317,7 +317,7 @@ class PALADIN(USBMS):
                         db_books[book],
                         bookId,
                     )
-                    query = 'UPDATE booktags SET tag_id = ? WHERE tag_id = ?'
+                    query = 'UPDATE booktags SET book_id = ? WHERE book_id = ?'
                     cursor.execute(query, t)
 
             self.set_database_sequence_id(connection, 'books', sequence_max)

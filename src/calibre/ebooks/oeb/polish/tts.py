@@ -152,7 +152,8 @@ def mark_sentences_in_html(root, lang: str = '', voice: str = '') -> list[Senten
                     assert sid is not None
                     ans.append(Sentence(sid, text, self.parent_lang, self.parent_voice))
                     after = self.elem.tail[end:]
-                self.elem.tail = before
+                if spans:  # no spans when everything was skipped, leave the tail alone
+                    self.elem.tail = before
                 if after and spans:
                     spans[-1].tail = after
                 idx = p.index(self.elem)

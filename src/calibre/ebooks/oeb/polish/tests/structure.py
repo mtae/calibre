@@ -355,6 +355,8 @@ class Structure(BaseTest):
                 '<p>Here is some <b>bold, </b><i>italic, </i><u>underline, </u> text.': '<body>'
                 '<p><span id="1">Here is some <b>bold, </b><i>italic, </i><u>underline, </u> text.</span></p>',
                 '<p>A sentence wrapped\nonto multiple lines.': '<body><p><span id="1">A sentence wrapped\nonto multiple lines.</span></p>',
+                '<div data-calibre-tts="__skip__"><p>Skipped <b>bold</b> tail text.</p></div><p>Kept.': '<body><div data-calibre-tts="__skip__">'
+                '<p>Skipped <b>bold</b> tail text.</p></div><p><span id="1">Kept.</span></p>',
             }.items()
         ):
             root = parse(text, namespace_elements=True)

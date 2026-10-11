@@ -482,6 +482,7 @@ clean_xml_chars(PyObject *self, PyObject *text) {
     }
     if (PyUnicode_GET_LENGTH(text) == 0) {
         // make sure that malloc(0) will never happen
+        Py_INCREF(text);
         return text;
     }
 

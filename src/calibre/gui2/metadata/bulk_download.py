@@ -262,6 +262,8 @@ def download(all_ids, tf, db, do_identify, covers, ensure_fields, log=None, abor
                 if e.orig_tb:
                     raise Exception('Failed to download metadata. Original traceback: \n\n' + e.orig_tb)
                 raise
+            if ret['result'] is None:  # the download was aborted by the user
+                break
             count += batch_size
 
             fids, fcovs, allf = ret['result']

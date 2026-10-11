@@ -930,7 +930,7 @@ class KOBO(USBMS):
             if ReadStatus == 0:
                 datelastread = None
             else:
-                datelastread = 'CURRENT_TIMESTAMP' if datelastread is None else datelastread
+                datelastread = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()) if datelastread is None else datelastread
 
             t = (
                 ReadStatus,

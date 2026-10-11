@@ -317,6 +317,22 @@ class Structure(BaseTest):
         self.assertEqual('a.html', find_cover_page(c))
         self.assertEqual('a.html', next(c.spine_names)[0])
 
+    def test_remove_unused_images_keeps_cover(self):
+        from calibre.ebooks.oeb.polish.images import remove_unused_images
+
+        page = cmi('a.html', '<p>text</p>')
+        for ver, kw in (
+            (2, {'meta_cover': 'cover.png'}),
+            (3, {'meta_cover': 'cover.png'}),
+            (3, {}),
+            (2, {'guide': [('cover.png', 'cover', '')]}),
+        ):
+            c = self.create_epub([page, cmi('cover.png', b'z', 'cover-image' if ver == 3 and not kw else None), cmi('unused.png')], ver=ver, **kw)
+            self.assertTrue(remove_unused_images(c))
+            self.assertFalse(c.has_name('unused.png'))
+            self.assertTrue(c.has_name('cover.png'), f'{ver=} {kw=}')
+            self.assertEqual('cover.png', find_cover_image(c, strict=True), f'{ver=} {kw=}')
+
     def test_mark_sentences(self):
         from html5_parser import parse
         from lxml import html

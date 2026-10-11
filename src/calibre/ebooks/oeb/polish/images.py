@@ -435,6 +435,7 @@ def remove_unused_images(container, report=None):
     """
     report = report or (lambda x: x)
     from calibre.ebooks.oeb.polish.container import OEB_STYLES
+    from calibre.ebooks.oeb.polish.cover import get_raster_cover_name
     from calibre.ebooks.oeb.polish.report import safe_href_to_name
 
     # Collect spine document names
@@ -465,6 +466,11 @@ def remove_unused_images(container, report=None):
                 mt = container.mime_map.get(target, '')
                 if mt and mt.startswith('image/'):
                     referenced_images.add(target)
+
+    # The cover is referenced from the OPF, not from any document
+    cover_name = get_raster_cover_name(container)
+    if cover_name:
+        referenced_images.add(cover_name)
 
     # Find all images in the container and remove unused ones
     all_images = {name for name, mt in container.mime_map.items() if mt.startswith('image/') and container.exists(name)}

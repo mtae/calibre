@@ -79,7 +79,40 @@ class TestPaladinDB(unittest.TestCase):
         self.assertEqual(c.execute('select tag_id, book_id from booktags').fetchall(), [(1, new_id)])
 
 
+class TestSmartDeviceApp(unittest.TestCase):
+    def test_get_file_stops_when_device_closes_connection(self):
+        import socket
+        import threading
+        import types
+
+        from calibre.devices.errors import ControlError
+        from calibre.devices.smart_device_app.driver import SMART_DEVICE_APP
+
+        writes = []
+
+        def write(data):
+            writes.append(data)
+            self.assertLess(len(writes), 100, 'get_file keeps reading from a closed connection')
+
+        d = SMART_DEVICE_APP.__new__(SMART_DEVICE_APP)
+        d.sync_lock = threading.RLock()
+        d.settings = lambda: types.SimpleNamespace(extra_customization=[False] * 20)
+        d._debug = lambda *a, **k: None
+        d._call_client = lambda *a, **k: ('OK', {'fileLength': 100})
+        d._close_device_socket = lambda: None
+        d.max_book_packet_len = 4096
+        device, peer = socket.socketpair()
+        peer.sendall(b'x' * 10)
+        peer.close()
+        d.device_socket = device
+        try:
+            self.assertRaises(ControlError, d.get_file, 'x.epub', types.SimpleNamespace(write=write))
+        finally:
+            device.close()
+
+
 def find_tests():
     ans = unittest.defaultTestLoader.loadTestsFromTestCase(TestKoboDB)
     ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestPaladinDB))
+    ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestSmartDeviceApp))
     return ans

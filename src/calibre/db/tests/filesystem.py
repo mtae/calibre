@@ -149,6 +149,51 @@ class FilesystemTest(BaseTest):
             if x.is_dir():
                 self.assertTrue(os.listdir(x.path))
 
+    def test_set_metadata_move_is_transactional(self):
+        "A set_metadata() that fails after it renamed the book folder leaves the title, authors, folder and cover as they were"
+        from calibre.db.tests.base import IMG
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        cache = self.init_cache(self.cloned_library)
+        library_path = cache.backend.library_path
+        old_path = cache.field_for('path', 1)
+        old_data = self.get_filesystem_data(cache, 1)
+
+        def folders():
+            return {os.path.relpath(r, library_path) for r, dirs, files in os.walk(library_path)}
+
+        old_folders = folders()
+        mi = Metadata('Moved Title', ['Moved Author'])
+        mi.comments = 'moved comments'
+        mi.cover_data = ('jpg', IMG)
+        orig = cache._set_field
+
+        def failing_set_field(name, *a, **kw):
+            if name == 'comments':
+                raise OSError('injected failure')
+            return orig(name, *a, **kw)
+
+        cache._set_field = failing_set_field
+        try:
+            self.assertRaises(OSError, cache.set_metadata, 1, mi)
+        finally:
+            del cache._set_field
+        self.assertEqual(old_path, cache.field_for('path', 1))
+        self.assertNotEqual('Moved Title', cache.field_for('title', 1))
+        self.assertNotEqual(('Moved Author',), cache.field_for('authors', 1))
+        self.assertEqual(old_folders, folders(), 'a folder was left behind or removed')
+        self.assertEqual(old_data, self.get_filesystem_data(cache, 1))
+        self.assert_library_consistent(cache)
+
+        cache.set_metadata(1, mi)
+        self.assertEqual('Moved Author/Moved Title (1)', cache.field_for('path', 1))
+        self.assertFalse(os.path.exists(os.path.join(library_path, *old_path.split('/'))), 'the old folder is still there')
+        data = self.get_filesystem_data(cache, 1)
+        self.assertEqual(IMG, data.pop('cover'))
+        old_data.pop('cover')
+        self.assertEqual(old_data, data)
+        self.assert_library_consistent(cache)
+
     def test_rename_of_extra_files(self):
         cl = self.cloned_library
         cache = self.init_cache(cl)

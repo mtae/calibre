@@ -780,6 +780,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.conversion.utils import find_tests
 
         a(find_tests())
+        from calibre.ebooks.txt.markdownml import find_tests
+
+        a(find_tests())
         from calibre.ebooks.oeb.transforms.split import find_tests
 
         a(find_tests())

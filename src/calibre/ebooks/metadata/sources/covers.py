@@ -122,7 +122,7 @@ def run_download(log, results, abort, title=None, authors=None, identifiers={}, 
             if result is not None:
                 results.put(result)
                 found_results[result[0]] = result
-                if first_result_at is not None:
+                if first_result_at is None:
                     first_result_at = time.time()
         except Empty:
             pass
@@ -196,3 +196,44 @@ def download_cover(log, title=None, authors=None, identifiers={}, timeout=30):
     results.sort(key=keygen)
 
     return results[0] if results else None
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class Plugin:
+        can_get_multiple_covers = False
+        browser = SimpleNamespace(addheaders=[])
+
+        def __init__(self, name, hangs):
+            self.name, self.hangs = name, hangs
+
+        def is_configured(self):
+            return True
+
+        def download_cover(self, log, rq, abort, **kw):
+            if self.hangs:
+                abort.wait(5)
+            else:
+                rq.put((self, b'cover'))
+
+    class Test(unittest.TestCase):
+        def test_wait_after_first_cover_result(self):
+            plugins = [Plugin('fast', False), Plugin('hangs', True)]
+            results, abort = Queue(), Event()
+            with patch.multiple(
+                __name__,
+                metadata_plugins=lambda *a: plugins,
+                process_result=lambda log, x: (x[0], 100, 100, 'png', x[1]),
+                msprefs={'wait_after_first_cover_result': 0.5},
+            ):
+                start = time.monotonic()
+                run_download(create_log(StringIO()), results, abort)
+                elapsed = time.monotonic() - start
+            self.assertEqual(results.qsize(), 1)
+            self.assertTrue(abort.is_set())
+            self.assertLess(elapsed, 3)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

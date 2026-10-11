@@ -788,11 +788,8 @@ KNOWN_INCONSISTENT = known_table(
     ('saved_search_add', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',
     )),
-    # set_metadata sets the title and authors in a change of their own, committed before the folder is moved by another one (it is not in a single
-    # change yet). A failure to remove the empty author folder after the commit leaves it behind
-    ('set_metadata_rename', {'orphan-folder'}, (
-        'file:remove_dir_if_empty@1',
-    )),
+    # set_metadata moves the folder in the same change as the title and authors. A failure to remove the empty author folder after the
+    # commit leaves it behind
     # The saved searches are stored in the preferences. The in-memory copy is changed before the preference is written
     ('saved_search_delete', {'prefs'}, (
         'sql:update preferences set val=? where id=?@1',

@@ -35,7 +35,7 @@ with ``on_rollback()`` removing what was staged. The first callback that fails d
 prevent the others from running, its exception is raised after all of them ran.
 
 Migrated so far: set_field, add_format, remove_formats, set_cover, restore_original_format, move_format_from_trash, rename_items,
-remove_items, update_path (and so the title and authors of set_field), set_link_map, set_link_for_authors, set_sort_for_authors, set_notes_for, unretire_note_for and import_note. The item methods
+remove_items, update_path (and so the title and authors of set_field and set_metadata), set_link_map, set_link_for_authors, set_sort_for_authors, set_notes_for, unretire_note_for and import_note. The item methods
 register the table of the field and the books that have the items before they change anything, so a failure clears the caches of all
 of them; the move of the folders of the books that a rename of authors causes, the link cache clearing and the events run from
 after_commit(). The notes methods queue their file removals (see Notes.deferred_file_operations()) and write the backup file of
@@ -50,11 +50,11 @@ rollback (the sizes are derived from the scan of the data table made when the fo
 
 Residuals: a failure of an after_commit() file operation (disk full, permissions) leaves the database
 changed and the file as it was, it is raised to the caller; a ``_change()`` entered while the caller already holds a transaction of its
-own (set_metadata still does) is applied when its savepoint is released, which is before
+own is applied when its savepoint is released, which is before
 the outer transaction commits. File operations other than the notes' are not deferred unless the write method adds them with
 ``after_commit()``. update_path stages the folder of a book (copy_tree, hardlinking when it can) next to the old one, switches
 the path and file name rows in the change, and removes the old folder from after_commit(); a failure removing it leaves a stray
-folder. set_metadata still moves the folder in a change of its own, after the title and authors were committed.
+folder. set_metadata does it in the same change as the title, authors and the other fields.
 """
 
 

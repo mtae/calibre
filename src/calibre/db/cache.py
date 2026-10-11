@@ -2449,51 +2449,52 @@ class Cache:
         def set_field(name, val):
             dirtied.update(self._set_field(name, {book_id: val}, do_path_update=False, allow_case_change=allow_case_change))
 
-        path_changed = False
-        if set_title and mi.title:
-            path_changed = True
-            set_field('title', mi.title)
-        authors_changed = False
-        if set_authors:
-            path_changed = True
-            if not mi.authors:
-                mi.authors = [_('Unknown')]
-            authors = []
-            for a in mi.authors:
-                authors += string_to_authors(a)
-            set_field('authors', authors)
-            authors_changed = True
-
-        if path_changed:
-            self._update_path({book_id})
-
-        def protected_set_field(name, val):
-            try:
-                set_field(name, val)
-            except Exception:
-                if ignore_errors:
-                    traceback.print_exc()
-                else:
-                    raise
-
-        # force_changes has no effect on cover manipulation
         try:
-            cdata = mi.cover_data[1]
-            if cdata is None and isinstance(mi.cover, (str, bytes)) and mi.cover and os.access(mi.cover, os.R_OK):
-                with open(mi.cover, 'rb') as f:
-                    cdata = f.read() or None
-            if cdata is not None:
-                self._set_cover({book_id: cdata})
-        except Exception:
-            if ignore_errors:
-                traceback.print_exc()
-            else:
-                raise
+            # One change for the title, authors, folder, cover and the other fields: its transaction is committed at the end, the files
+            # of the notes of unused items, the old folder and the replaced cover files are only touched after the commit
+            with self._change() as change:
+                path_changed = False
+                if set_title and mi.title:
+                    path_changed = True
+                    set_field('title', mi.title)
+                authors_changed = False
+                if set_authors:
+                    path_changed = True
+                    if not mi.authors:
+                        mi.authors = [_('Unknown')]
+                    authors = []
+                    for a in mi.authors:
+                        authors += string_to_authors(a)
+                    set_field('authors', authors)
+                    authors_changed = True
 
-        try:
-            # The files of the notes of items that are no longer used are removed only after the transaction was committed, a rollback
-            # cannot restore them
-            with self.backend.notes.deferred_file_operations(), self.backend.conn:  # Speed up set_metadata by not operating in autocommit mode
+                if path_changed:
+                    # The folder is staged in the change and the old one removed after the commit
+                    self._update_path_in_change(change, {book_id})
+
+                def protected_set_field(name, val):
+                    try:
+                        set_field(name, val)
+                    except Exception:
+                        if ignore_errors:
+                            traceback.print_exc()
+                        else:
+                            raise
+
+                # force_changes has no effect on cover manipulation
+                try:
+                    cdata = mi.cover_data[1]
+                    if cdata is None and isinstance(mi.cover, (str, bytes)) and mi.cover and os.access(mi.cover, os.R_OK):
+                        with open(mi.cover, 'rb') as f:
+                            cdata = f.read() or None
+                    if cdata is not None:
+                        self._set_cover({book_id: cdata})
+                except Exception:
+                    if ignore_errors:
+                        traceback.print_exc()
+                    else:
+                        raise
+
                 for field in ('rating', 'series_index', 'timestamp'):
                     val = getattr(mi, field)
                     if val is not None:

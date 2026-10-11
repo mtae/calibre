@@ -92,11 +92,8 @@ def handle_private_entities(data):
         num_of_nl_in_pre = pre.count('\n')
         if '<!DOCTYPE' in pre:  # Handle user defined entities
             user_entities = {}
-            for match in re.finditer(r'<!ENTITY\s+(\S+)\s+([^>]+)', pre):
-                val = match.group(2)
-                if val.startswith('"') and val.endswith('"'):
-                    val = val[1:-1]
-                user_entities[match.group(1)] = val
+            for match in re.finditer(r'''<!ENTITY\s+(\S+)\s+(?:"([^"]*)"|'([^']*)')\s*>''', pre):
+                user_entities[match.group(1)] = match.group(2) if match.group(2) is not None else match.group(3)
             if user_entities:
                 data = ('\n' * num_of_nl_in_pre) + data[idx:]
                 pat = re.compile(r'&({});'.format('|'.join(user_entities.keys())))

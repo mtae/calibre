@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from calibre.customize.profiles import OutputProfile
 from calibre.utils.logging import default_log
+from calibre.web.feeds import Feed
 from calibre.web.feeds.news import BasicNewsRecipe
 
 
@@ -50,6 +51,17 @@ class TestFeeds(unittest.TestCase):
                 self.assertFalse(recipe.jobs)
             finally:
                 os.chdir(cwd)
+
+    def test_duplicate_article_id(self):
+        feed = Feed()
+        feed.populate_from_preparsed_feed('t', [
+            {'id': 'a', 'title': 'one', 'url': 'http://x/1'},
+            {'id': 'a', 'title': 'dup', 'url': 'http://x/2'},
+            {'id': 'b', 'title': 'three', 'url': 'http://x/3'},
+            {'id': 'c', 'title': 'four', 'url': 'http://x/4'},
+        ])
+        # A duplicate id must only skip that article, not the rest of the feed
+        self.assertEqual([a.title for a in feed.articles], ['one', 'three', 'four'])
 
 
 def find_tests() -> unittest.TestSuite:

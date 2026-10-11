@@ -839,7 +839,9 @@ def set_series(root, prefixes, refines, series, series_index):
     for meta in XPath('./opf:metadata/opf:meta[@name="calibre:series" or @name="calibre:series_index"]')(root):
         remove_element(meta, refines)
     for meta in XPath('./opf:metadata/opf:meta[@property="belongs-to-collection"]')(root):
-        remove_element(meta, refines)
+        # Leave collections of other types, such as sets, alone
+        if properties_for_id(meta.get('id'), refines).get('collection-type', 'series') == 'series':
+            remove_element(meta, refines)
     if series:
         create_series(root, refines, series, fmt_sidx(series_index))
 

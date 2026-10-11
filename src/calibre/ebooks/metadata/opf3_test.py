@@ -346,6 +346,12 @@ class TestOPF3(unittest.TestCase):
         )
         self.ae(('yyy', 2.1), rt(root))
         self.ae(('zzz', 3.3), st(root, 'zzz', 3.3))
+        root = self.get_opf(
+            '<meta property="belongs-to-collection" id="c01">yyy</meta><meta refines="#c01" property="collection-type">series</meta>'
+            '<meta property="belongs-to-collection" id="c02">box</meta><meta refines="#c02" property="collection-type">set</meta>'
+        )
+        self.ae(('zzz', 3.3), st(root, 'zzz', 3.3))
+        self.ae(['box', 'zzz'], sorted(x.text for x in XPath('//opf:meta[@property="belongs-to-collection"]')(root)))
 
     # }}}
 

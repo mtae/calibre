@@ -257,11 +257,11 @@ class LLMPanel(ConverseWidget):
         context_header = format_books_for_query(self.books)
         context_header += ' When you answer the questions use markdown formatting for the answers wherever possible.'
         if len(self.books) > 1:
-            context_header += ' If any of the specified books are unknown to you, instead of answering the following'
-            ' questions, just say the books are unknown.'
+            context_header += (' If any of the specified books are unknown to you, instead of answering the following'
+                               ' questions, just say the books are unknown.')
         else:
-            context_header += ' If the specified book is unknown to you instead of answering the following questions'
-            ' just say the book is unknown.'
+            context_header += (' If the specified book is unknown to you instead of answering the following questions'
+                               ' just say the book is unknown.')
         if language_instruction := self.get_language_instruction():
             context_header += ' ' + language_instruction
         yield ChatMessage(context_header, type=ChatMessageType.system)
@@ -293,6 +293,34 @@ class LLMBookDialog(Dialog):
 
     def sizeHint(self):
         return QSize(600, 750)
+
+
+def find_tests():
+    import unittest
+    from unittest.mock import patch
+
+    class TestInitialMessages(unittest.TestCase):
+        def test_system_prompt_unknown_book_instruction(self):
+            class Panel:
+                def __init__(self, num_books, language_instruction=''):
+                    self.books = [Metadata(f'Book {i}') for i in range(num_books)]
+                    self.language_instruction = language_instruction
+
+                def get_language_instruction(self):
+                    return self.language_instruction
+
+            def system_prompt(*args):
+                with patch(f'{__name__}.format_books_for_query', return_value='BOOKS.'):
+                    system, user = LLMPanel.create_initial_messages(Panel(*args), 'ACTION')
+                self.assertEqual(system.type, ChatMessageType.system)
+                self.assertEqual(user.query, 'ACTION')
+                return system.query
+
+            self.assertTrue(system_prompt(1).endswith(' just say the book is unknown.'), system_prompt(1))
+            self.assertTrue(system_prompt(2).endswith(' just say the books are unknown.'), system_prompt(2))
+            self.assertTrue(system_prompt(2, 'Reply in French.').endswith(' just say the books are unknown. Reply in French.'))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestInitialMessages)
 
 
 def develop():

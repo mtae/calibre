@@ -317,6 +317,38 @@ class Structure(BaseTest):
         self.assertEqual('a.html', find_cover_page(c))
         self.assertEqual('a.html', next(c.spine_names)[0])
 
+    def test_remove_unused_images_keeps_cover(self):
+        from calibre.ebooks.oeb.polish.images import remove_unused_images
+
+        page = cmi('a.html', '<p>text</p>')
+        for ver, kw in (
+            (2, {'meta_cover': 'cover.png'}),
+            (3, {'meta_cover': 'cover.png'}),
+            (3, {}),
+            (2, {'guide': [('cover.png', 'cover', '')]}),
+        ):
+            c = self.create_epub([page, cmi('cover.png', b'z', 'cover-image' if ver == 3 and not kw else None), cmi('unused.png')], ver=ver, **kw)
+            self.assertTrue(remove_unused_images(c))
+            self.assertFalse(c.has_name('unused.png'))
+            self.assertTrue(c.has_name('cover.png'), f'{ver=} {kw=}')
+            self.assertEqual('cover.png', find_cover_image(c, strict=True), f'{ver=} {kw=}')
+
+    def test_remove_unused_images_follows_references(self):
+        from calibre.ebooks.oeb.polish.images import remove_unused_images
+
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="in_svg.png"/></svg>'
+        c = self.create_epub([
+            cmi('a.html', '<head><link rel="stylesheet" href="a.css"/></head><body><p><img src="a.svg"/></p></body>'),
+            cmi('a.css', '@import "b.css";'),
+            cmi('b.css', 'p { background: url(in_imported_css.png) }'),
+            cmi('a.svg', svg),
+            cmi('in_svg.png'),
+            cmi('in_imported_css.png'),
+            cmi('unused.png'),
+        ])
+        self.assertTrue(remove_unused_images(c))
+        self.assertEqual({'in_svg.png', 'in_imported_css.png'}, {name for name in c.mime_map if name.endswith('.png')})
+
     def test_mark_sentences(self):
         from html5_parser import parse
         from lxml import html
@@ -355,6 +387,8 @@ class Structure(BaseTest):
                 '<p>Here is some <b>bold, </b><i>italic, </i><u>underline, </u> text.': '<body>'
                 '<p><span id="1">Here is some <b>bold, </b><i>italic, </i><u>underline, </u> text.</span></p>',
                 '<p>A sentence wrapped\nonto multiple lines.': '<body><p><span id="1">A sentence wrapped\nonto multiple lines.</span></p>',
+                '<div data-calibre-tts="__skip__"><p>Skipped <b>bold</b> tail text.</p></div><p>Kept.': '<body><div data-calibre-tts="__skip__">'
+                '<p>Skipped <b>bold</b> tail text.</p></div><p><span id="1">Kept.</span></p>',
             }.items()
         ):
             root = parse(text, namespace_elements=True)

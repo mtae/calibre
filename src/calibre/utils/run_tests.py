@@ -771,6 +771,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.conversion.plugins.txt_input import find_tests
 
         a(find_tests())
+        from calibre.ebooks.oeb.transforms.split import find_tests
+
+        a(find_tests())
         from calibre.ebooks.metadata.rtf import find_tests
 
         a(find_tests())

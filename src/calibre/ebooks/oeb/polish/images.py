@@ -434,6 +434,7 @@ def remove_unused_images(container, report=None):
     stylesheet used by files in the spine.
     """
     report = report or (lambda x: x)
+    from calibre.ebooks.oeb.base import XLINK_NS
     from calibre.ebooks.oeb.polish.container import OEB_STYLES
     from calibre.ebooks.oeb.polish.cover import get_raster_cover_name
     from calibre.ebooks.oeb.polish.report import safe_href_to_name
@@ -454,18 +455,29 @@ def remove_unused_images(container, report=None):
                 if mt in OEB_STYLES:
                     used_stylesheets.add(sname)
 
-    # Collect all images referenced by spine docs and their stylesheets
-    relevant_sources = spine_docs | used_stylesheets
+    # Collect all images referenced by spine docs and their stylesheets,
+    # following links from the stylesheets and SVG images they reference
+    pending = list(spine_docs | used_stylesheets)
+    seen = set(pending)
     referenced_images = set()
-    for source_name in relevant_sources:
+    while pending:
+        source_name = pending.pop()
         if not container.exists(source_name):
             continue
-        for href, _line_number, _offset in container.iterlinks(source_name):
+        if container.mime_map.get(source_name) == 'image/svg+xml':
+            # iterlinks() does not handle SVG
+            hrefs = container.parsed(source_name).xpath('//@href | //@xlink:href', namespaces={'xlink': XLINK_NS})
+        else:
+            hrefs = (href for href, _line_number, _offset in container.iterlinks(source_name))
+        for href in hrefs:
             target = safe_href_to_name(container, href, source_name)
             if target and container.exists(target):
                 mt = container.mime_map.get(target, '')
                 if mt and mt.startswith('image/'):
                     referenced_images.add(target)
+                if (mt in OEB_STYLES or mt == 'image/svg+xml') and target not in seen:
+                    seen.add(target)
+                    pending.append(target)
 
     # The cover is referenced from the OPF, not from any document
     cover_name = get_raster_cover_name(container)

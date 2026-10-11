@@ -780,6 +780,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.metadata.fb2 import find_tests
 
         a(find_tests())
+        from calibre.ebooks.metadata.book.render import find_tests
+
+        a(find_tests())
         from calibre.utils.xml_parse import find_tests
 
         a(find_tests())

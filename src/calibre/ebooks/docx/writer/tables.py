@@ -313,7 +313,7 @@ class Table:
         for r, row in enumerate(self.rows):
             for idx, cell in enumerate(row.cells):
                 if cell.row_span > 1:
-                    for nrow in self.rows[r + 1 :]:
+                    for nrow in self.rows[r + 1 : r + cell.row_span]:
                         sc = SpannedCell(cell, horizontal=False)
                         try:
                             tcell = nrow.cells[idx]

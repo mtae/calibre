@@ -409,6 +409,50 @@ def find_tests():
             self.assertEqual(txtz_formatting_for_extension('.textile'), 'textile')
             self.assertIsNone(txtz_formatting_for_extension('.txt'))
 
+        def test_textile_pre_state_is_reset(self):
+            from calibre.ebooks.oeb.base import XHTML
+            from calibre.ebooks.oeb.polish.parsing import parse
+            from calibre.ebooks.txt.textileml import TextileMLizer
+            from calibre.utils.logging import Log
+
+            class Opts:
+                def __getattr__(self, name):
+                    return False
+
+            class Style:
+                def __getitem__(self, key):
+                    return 'auto' if key == 'margin-bottom' else 'normal'
+
+                def __getattr__(self, name):
+                    return 'normal'
+
+                def __contains__(self, key):
+                    return False
+
+                def cssdict(self):
+                    return {}
+
+            class Profile:
+                fbase = 12
+
+            class Stylizer:
+                profile = Profile()
+
+                def style(self, elem):
+                    return Style()
+
+            mlizer = TextileMLizer(Log())
+            mlizer.opts = Opts()
+            vars(mlizer).update(
+                in_pre=False, in_table=False, in_a_link=False, links={}, list=[], our_links=[], our_ids=[], images={}, id_no_text='',
+                style_embed=[], remove_space_after_newline=False, style_bold=False, style_italic=False, style_under=False,
+                style_strike=False, style_smallcap=False,
+            )
+            root = parse('<html xmlns="http://www.w3.org/1999/xhtml"><body><pre>code line 1\ncode line 2</pre><p>after text\nwrapped</p></body></html>')
+            out = ''.join(mlizer.dump_text(root.find(XHTML('body')), Stylizer()))
+            self.assertFalse(mlizer.in_pre)
+            self.assertEqual(out, '\npre. code line 1\ncode line 2\n\np. after text wrapped\n')
+
     return unittest.defaultTestLoader.loadTestsFromTestCase(TXTInputTest)
 
 

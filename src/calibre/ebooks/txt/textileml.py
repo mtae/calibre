@@ -307,7 +307,7 @@ class TextileMLizer(OEB2HTML):
         if tag == 'blockquote':
             text.append('\nbq. ')
             tags.append('\n')
-        elif tag in ('abbr', 'acronym'):
+        elif tag in ('abbr', 'acronym') and 'title' in attribs:
             text.append('')
             txt = attribs['title']
             tags.append('(' + txt + ')')

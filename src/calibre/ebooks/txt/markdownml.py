@@ -296,22 +296,29 @@ def find_tests():
     from calibre.utils.xml_parse import safe_xml_fromstring
 
     class MarkdownMLTest(unittest.TestCase):
-        def test_unparsable_margins_do_not_abort(self):
+        def convert(self, cls, css, body):
             opts = SimpleNamespace(
                 output_profile=output_profiles[0](None), source_profile=input_profiles[0](None), change_justification='original',
                 keep_links=False, keep_image_references=False, use_alt_text_for_images=False, unsmarten_punctuation=False,
                 keep_color=False, max_line_length=0, force_max_line_length=False)
+            oeb = OEBBook(default_log)
+            html = safe_xml_fromstring(
+                f'<html xmlns="{XHTML_NS}"><head><title>t</title><style>{css}</style></head><body>{body}</body></html>')
+            item = oeb.manifest.add('c', 'c.html', XHTML_MIME, data=html)
+            oeb.spine.add(item, True)
+            return cls(default_log).extract_content(oeb, opts)
+
+        def test_unparsable_margins_do_not_abort(self):
             for cls in (MarkdownMLizer, TextileMLizer):
                 for css in (
                     'p{margin-top:calc(1em + 2px)}', 'p{margin-bottom:calc(1em + 2px)}',
                     'p{font-size:0;margin-top:2em}', 'p{font-size:0;margin-bottom:2em}',
                 ):
                     with self.subTest(cls=cls.__name__, css=css):
-                        oeb = OEBBook(default_log)
-                        html = safe_xml_fromstring(
-                            f'<html xmlns="{XHTML_NS}"><head><title>t</title><style>{css}</style></head><body><p>one</p><p>two</p></body></html>')
-                        item = oeb.manifest.add('c', 'c.html', XHTML_MIME, data=html)
-                        oeb.spine.add(item, True)
-                        self.assertIn('two', cls(default_log).extract_content(oeb, opts))
+                        self.assertIn('two', self.convert(cls, css, '<p>one</p><p>two</p>'))
+
+        def test_textile_abbr_without_title(self):
+            self.assertIn('NASA', self.convert(TextileMLizer, '', '<p><abbr>NASA</abbr> two</p>'))
+            self.assertIn('NASA(National)', self.convert(TextileMLizer, '', '<p><abbr title="National">NASA</abbr> two</p>'))
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(MarkdownMLTest)

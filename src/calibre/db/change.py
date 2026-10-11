@@ -35,7 +35,8 @@ with ``on_rollback()`` removing what was staged. The first callback that fails d
 prevent the others from running, its exception is raised after all of them ran.
 
 Migrated so far: set_field, add_format, remove_formats, set_cover, restore_original_format, move_format_from_trash, rename_items,
-remove_items, update_path (and so the title and authors of set_field and set_metadata), set_link_map, set_link_for_authors, set_sort_for_authors, set_notes_for, unretire_note_for and import_note. The item methods
+remove_items, update_path (and so the title and authors of set_field), set_metadata, set_link_map, set_link_for_authors,
+set_sort_for_authors, set_notes_for, unretire_note_for and import_note. The item methods
 register the table of the field and the books that have the items before they change anything, so a failure clears the caches of all
 of them; the move of the folders of the books that a rename of authors causes, the link cache clearing and the events run from
 after_commit(). The notes methods queue their file removals (see Notes.deferred_file_operations()) and write the backup file of

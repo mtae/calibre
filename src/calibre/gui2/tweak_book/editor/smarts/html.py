@@ -221,9 +221,15 @@ def find_closing_tag(tag, max_tags=sys.maxsize):
     return None
 
 
+def doc_position(block, offset):
+    # Tag and attribute offsets are code point offsets into the text of the
+    # block, whereas Qt document positions are in UTF-16 code units
+    return block.position() + utf16_length(str(block.text())[:offset])
+
+
 def select_tag(cursor, tag):
-    cursor.setPosition(tag.start_block.position() + tag.start_offset)
-    cursor.setPosition(tag.end_block.position() + tag.end_offset + 1, QTextCursor.MoveMode.KeepAnchor)
+    cursor.setPosition(doc_position(tag.start_block, tag.start_offset))
+    cursor.setPosition(doc_position(tag.end_block, tag.end_offset + 1), QTextCursor.MoveMode.KeepAnchor)
     return cursor.selectedText().replace(PARAGRAPH_SEPARATOR, '\n').rstrip('\0')
 
 
@@ -285,10 +291,10 @@ def ensure_not_within_tag_definition(cursor, forward=True):
         if forward:
             block, boundary = next_tag_boundary(block, max(0, offset - 1))
             if block is not None:
-                cursor.setPosition(block.position() + boundary.offset + 1)
+                cursor.setPosition(doc_position(block, boundary.offset + 1))
                 return True
         else:
-            cursor.setPosition(b.position() + boundary.offset)
+            cursor.setPosition(doc_position(b, boundary.offset))
             return True
 
     return False
@@ -318,10 +324,10 @@ def set_style_property(tag, property_name, value, editor):
     if block is None or offset is None:
         d = parseStyle('')
         d.setProperty(property_name, value)
-        c.setPosition(tag.end_block.position() + tag.end_offset)
+        c.setPosition(doc_position(tag.end_block, tag.end_offset))
         c.insertText(f' style="{css(d)}"')
     else:
-        c.setPosition(block.position() + offset - 1)
+        c.setPosition(doc_position(block, offset) - 1)
         end_block, end_offset = find_end_of_attribute(block, offset + 1)
         if end_block is None:
             return error_dialog(
@@ -330,7 +336,7 @@ def set_style_property(tag, property_name, value, editor):
                 _('The current block tag has an existing unclosed style attribute. Run the Fix HTML tool first.'),
                 show=True,
             )
-        c.setPosition(end_block.position() + end_offset, QTextCursor.MoveMode.KeepAnchor)
+        c.setPosition(doc_position(end_block, end_offset), QTextCursor.MoveMode.KeepAnchor)
         d = parseStyle(editor.selected_text_from_cursor(c)[1:-1])
         d.setProperty(property_name, value)
         c.insertText(f'"{css(d)}"')
@@ -397,7 +403,7 @@ class Smarts(NullSmarts):
         if tag is None:
             return False
         c = editor.textCursor()
-        c.setPosition(tag.start_block.position() + tag.start_offset + (1 if start else 2))
+        c.setPosition(doc_position(tag.start_block, tag.start_offset + (1 if start else 2)))
         editor.setTextCursor(c)
         return True
 
@@ -408,8 +414,8 @@ class Smarts(NullSmarts):
         if start is None or end is None:
             return False
         c = editor.textCursor()
-        c.setPosition(start.start_block.position() + start.end_offset + 1)
-        c.setPosition(end.start_block.position() + end.start_offset, QTextCursor.MoveMode.KeepAnchor)
+        c.setPosition(doc_position(start.end_block, start.end_offset + 1))
+        c.setPosition(doc_position(end.start_block, end.start_offset), QTextCursor.MoveMode.KeepAnchor)
         editor.setTextCursor(c)
         return True
 
@@ -421,8 +427,8 @@ class Smarts(NullSmarts):
         c.beginEditBlock()
 
         def erase_tag(tag):
-            c.setPosition(tag.start_block.position() + tag.start_offset)
-            c.setPosition(tag.end_block.position() + tag.end_offset + 1, QTextCursor.MoveMode.KeepAnchor)
+            c.setPosition(doc_position(tag.start_block, tag.start_offset))
+            c.setPosition(doc_position(tag.end_block, tag.end_offset + 1), QTextCursor.MoveMode.KeepAnchor)
             c.removeSelectedText()
 
         if self.last_matched_closing_tag:
@@ -632,15 +638,15 @@ class Smarts(NullSmarts):
         all_tags = [] if ud is None else [t for t in ud.tags if (t.is_start and not t.closing)]
         tag_names = [t.name for t in all_tags]
         if all_tags and tag_names[: len(tags)] == tags:
-            c.setPosition(block.position() + all_tags[len(tags) - 1].offset)
+            c.setPosition(doc_position(block, all_tags[len(tags) - 1].offset))
             found_tag = True
         else:
             c.setPosition(block.position())
         if found_tag and attribute is not None:
-            start_offset = c.position() - block.position()
+            start_offset = all_tags[len(tags) - 1].offset
             nblock, offset = find_attribute_in_tag(block, start_offset, attribute)
             if nblock is not None:
-                c.setPosition(nblock.position() + offset)
+                c.setPosition(doc_position(nblock, offset))
         editor.setTextCursor(c)
         return found_tag
 
@@ -665,8 +671,8 @@ class Smarts(NullSmarts):
         ctag = find_closing_tag(tag)
         if ctag is None:
             return None
-        c.setPosition(tag.end_block.position() + tag.end_offset + 1)
-        c.setPosition(ctag.start_block.position() + ctag.start_offset, QTextCursor.MoveMode.KeepAnchor)
+        c.setPosition(doc_position(tag.end_block, tag.end_offset + 1))
+        c.setPosition(doc_position(ctag.start_block, ctag.start_offset), QTextCursor.MoveMode.KeepAnchor)
         return c
 
     def set_text_alignment(self, editor, value):
@@ -828,7 +834,7 @@ class Smarts(NullSmarts):
             # Not inside a opening tag definition
             return
         tagname = boundary.name.lower()
-        startpos = oblock.position() + boundary.offset
+        startpos = doc_position(oblock, boundary.offset)
         c.setPosition(c.position()), c.setPosition(startpos, QTextCursor.MoveMode.KeepAnchor)
         text = c.selectedText()
         m = self.complete_attr_pat.search(text)
@@ -916,6 +922,89 @@ class Smarts(NullSmarts):
             block = block.next()
         s, e = find_text_in_chunks(pat, chunks)
         return s != -1 and e != -1, s, e
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    class Block:
+        def __init__(self, text, position):
+            self._text, self._position = text, position
+
+        def text(self):
+            return self._text
+
+        def position(self):
+            return self._position
+
+    class Cursor:
+        # Positions are in UTF-16 code units, as in Qt
+        def __init__(self, text):
+            self.data, self.anchor_pos, self.pos = text.encode('utf-16-le'), 0, 0
+
+        def setPosition(self, pos, mode=QTextCursor.MoveMode.MoveAnchor):
+            self.pos = pos
+            if mode == QTextCursor.MoveMode.MoveAnchor:
+                self.anchor_pos = pos
+
+        def selectedText(self):
+            lo, hi = sorted((self.anchor_pos, self.pos))
+            return self.data[2 * lo : 2 * hi].decode('utf-16-le')
+
+        def insertText(self, text):
+            lo, hi = sorted((self.anchor_pos, self.pos))
+            self.data = self.data[: 2 * lo] + text.encode('utf-16-le') + self.data[2 * hi :]
+            self.pos = self.anchor_pos = lo + utf16_length(text)
+
+        def removeSelectedText(self):
+            self.insertText('')
+
+        def beginEditBlock(self):
+            pass
+
+        endEditBlock = beginEditBlock
+
+        def text(self):
+            return self.data.decode('utf-16-le')
+
+    class TestTagPositions(unittest.TestCase):
+        def setUp(self):
+            # Tag offsets are in code points, as set by the highlighter
+            line1 = '\U0001f600\U0001f600 x'
+            line2 = '\U0001f600\U0001f600\U0001f600<b><i>y</i></b>'
+            self.cursor = Cursor(line1 + '\n' + line2)
+            block = Block(line2, utf16_length(line1) + 1)
+
+            def tag(text, name):
+                start = line2.index(text)
+                return Tag(
+                    block, SimpleNamespace(offset=start, name=name, prefix=''), block, SimpleNamespace(offset=start + len(text) - 1)
+                )
+
+            self.opening, self.closing = tag('<i>', 'i'), tag('</i>', 'i')
+            self.smarts = SimpleNamespace(last_matched_tag=self.opening, last_matched_closing_tag=self.closing)
+            self.editor = SimpleNamespace(
+                highlighter=SimpleNamespace(join=lambda: None), textCursor=lambda: self.cursor, setTextCursor=lambda c: None
+            )
+
+        def test_rename_tag(self):
+            rename_tag(self.cursor, self.opening, self.closing, 'u')
+            self.assertEqual(self.cursor.text().partition('\n')[2], '\U0001f600\U0001f600\U0001f600<b><u>y</u></b>')
+
+        def test_remove_tag(self):
+            Smarts.remove_tag(self.smarts, self.editor)
+            self.assertEqual(self.cursor.text().partition('\n')[2], '\U0001f600\U0001f600\U0001f600<b>y</b>')
+
+        def test_select_tag_contents(self):
+            self.assertTrue(Smarts.select_tag_contents(self.smarts, self.editor))
+            self.assertEqual(self.cursor.selectedText(), 'y')
+
+        def test_jump_to_enclosing_tag(self):
+            self.assertTrue(Smarts.jump_to_enclosing_tag(self.smarts, self.editor))
+            self.assertEqual(self.cursor.data[2 * self.cursor.pos :].decode('utf-16-le')[:2], 'i>')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestTagPositions)
 
 
 if __name__ == '__main__':  # {{{

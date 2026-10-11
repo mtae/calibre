@@ -470,8 +470,10 @@ class KOBO(USBMS):
                     prefix = self._main_prefix
                 elif oncard == 'carda' and row['ContentID'].startswith('file:///mnt/sd/'):
                     prefix = self._card_a_prefix
+                else:
+                    continue
                 changed = update_booklist(
-                    self._main_prefix,
+                    prefix,
                     path,
                     row['Title'],
                     row['Attribution'],

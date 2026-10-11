@@ -20,6 +20,45 @@ class TestKoboDB(unittest.TestCase):
         # The date must be an actual timestamp, not the text of an SQL keyword
         datetime.strptime(date, '%Y-%m-%dT%H:%M:%S%z')
 
+    def test_books_only_lists_books_from_requested_location(self):
+        import contextlib
+        import os
+        import tempfile
+        import types
+
+        from calibre.devices.kobo.driver import KOBO
+
+        c = sqlite3.connect(':memory:')
+        c.row_factory = sqlite3.Row
+        c.execute(
+            'create table content (Title text, Attribution text, DateCreated text, ContentID text, MimeType text, ContentType text,'
+            ' ImageID text, ReadStatus int, ___ExpirationStatus int, FavouritesIndex int, Accessibility int, IsDownloaded int, BookID text)'
+        )
+        c.executemany(
+            "insert into content values (?,'A','2020-01-01T00:00:00',?,'application/epub+zip','6','img',0,1,-1,-1,1,null)",
+            [('Main', 'file:///mnt/onboard/m.txt'), ('Card', 'file:///mnt/sd/books/x.txt')],
+        )
+
+        @contextlib.contextmanager
+        def transaction(use_row_factory=False):
+            yield c
+
+        with tempfile.TemporaryDirectory() as tdir:
+            d = KOBO.__new__(KOBO)
+            d._main_prefix, d._card_a_prefix, d._card_b_prefix = (os.path.join(tdir, x) + os.sep for x in ('kobo', 'sd', 'sdb'))
+            for name in ('kobo/m.txt', 'sd/books/x.txt'):
+                os.makedirs(os.path.dirname(os.path.join(tdir, name)), exist_ok=True)
+                open(os.path.join(tdir, name), 'wb').close()
+            d.MUST_READ_METADATA = False
+            d.dbversion = 33
+            d.get_firmware_version = lambda: (2, 0)
+            d.parse_metadata_cache = lambda *a: False
+            d.settings = lambda: types.SimpleNamespace(extra_customization=[False] * 40, read_metadata=False)
+            d.report_progress = d.sync_booklists = lambda *a: None
+            d.database_transaction = transaction
+            self.assertEqual([(b.title, b.lpath) for b in d.books(oncard='carda')], [('Card', 'books/x.txt')])
+            self.assertEqual([(b.title, b.lpath) for b in d.books()], [('Main', 'm.txt')])
+
     def make_bookmark(self, contents, bookmarks, book_id, book_format, extension):
         import os
 
@@ -79,7 +118,40 @@ class TestPaladinDB(unittest.TestCase):
         self.assertEqual(c.execute('select tag_id, book_id from booktags').fetchall(), [(1, new_id)])
 
 
+class TestSmartDeviceApp(unittest.TestCase):
+    def test_get_file_stops_when_device_closes_connection(self):
+        import socket
+        import threading
+        import types
+
+        from calibre.devices.errors import ControlError
+        from calibre.devices.smart_device_app.driver import SMART_DEVICE_APP
+
+        writes = []
+
+        def write(data):
+            writes.append(data)
+            self.assertLess(len(writes), 100, 'get_file keeps reading from a closed connection')
+
+        d = SMART_DEVICE_APP.__new__(SMART_DEVICE_APP)
+        d.sync_lock = threading.RLock()
+        d.settings = lambda: types.SimpleNamespace(extra_customization=[False] * 20)
+        d._debug = lambda *a, **k: None
+        d._call_client = lambda *a, **k: ('OK', {'fileLength': 100})
+        d._close_device_socket = lambda: None
+        d.max_book_packet_len = 4096
+        device, peer = socket.socketpair()
+        peer.sendall(b'x' * 10)
+        peer.close()
+        d.device_socket = device
+        try:
+            self.assertRaises(ControlError, d.get_file, 'x.epub', types.SimpleNamespace(write=write))
+        finally:
+            device.close()
+
+
 def find_tests():
     ans = unittest.defaultTestLoader.loadTestsFromTestCase(TestKoboDB)
     ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestPaladinDB))
+    ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestSmartDeviceApp))
     return ans

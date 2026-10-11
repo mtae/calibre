@@ -783,6 +783,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.metadata.xmp import find_tests
 
         a(find_tests())
+        from calibre.ebooks.metadata.archive import find_tests
+
+        a(find_tests())
         from calibre.ebooks.metadata.sources.covers import find_tests
 
         a(find_tests())

@@ -201,7 +201,7 @@ def get_comic_book_info(d, mi, series_index='volume'):
             except Exception:
                 mi.series_index = 1
     if d.get('language', None):
-        lang = canonicalize_lang(d.get('lang'))
+        lang = canonicalize_lang(d.get('language'))
         if lang:
             mi.languages = [lang]
     if d.get('rating', -1) > -1:
@@ -334,3 +334,16 @@ def get_comic_images(path, tdir, first=1, last=0):  # first and last use 1 based
                 with open(os.path.join(tdir, make_filename(num, ext)), 'wb') as dest, zf.open(name) as src:
                     shutil.copyfileobj(src, dest)
     return len(pages)
+
+
+def find_tests():
+    import json
+    import unittest
+
+    class Test(unittest.TestCase):
+
+        def test_comic_book_info_language(self):
+            mi = parse_comic_comment(json.dumps({'ComicBookInfo/1.0': {'title': 'T', 'language': 'English'}}))
+            self.assertEqual(mi.languages, ['eng'])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

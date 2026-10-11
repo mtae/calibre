@@ -786,6 +786,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.fb2.fb2ml import find_tests
 
         a(find_tests())
+        from calibre.ebooks.epub.periodical import find_tests
+
+        a(find_tests())
         from calibre.ebooks.oeb.transforms.split import find_tests
 
         a(find_tests())

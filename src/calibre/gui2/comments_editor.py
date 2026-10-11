@@ -755,6 +755,8 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             return
 
         for url, pos in pos_map.items():
+            if url not in data_map:  # download failed, reported below
+                continue
             fname, data = data_map[url]
             newname = self.commit_downloaded_image(data, fname)
             c = self.textCursor()

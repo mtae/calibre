@@ -681,7 +681,6 @@ class FieldStrings:
         match_group = re.search(self.__index_sequence, line)
         if match_group:
             sequence = match_group.group(1)
-            separator = separator.replace('"', '&quot;')
             the_string += f'<use-sequence>{sequence}'
         # self.__index_entry_typ_exp = re.compile(r'\\f\s{1,}"(.*?)"')
         match_group = re.search(self.__index_entry_typ_exp, line)

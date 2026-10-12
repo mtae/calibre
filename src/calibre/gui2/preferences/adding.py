@@ -204,7 +204,7 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
                     _('Are you sure?'),
                     _('<b>WARNING:</b> Any files you place in %s will be automatically deleted after being added to calibre. Are you sure?') % path,
                 ):
-                    return
+                    raise AbortCommit('auto-add not confirmed')
         pattern = self.filename_pattern.commit()
         prefs['filename_pattern'] = pattern
         fmts = self.current_blocked_auto_formats
@@ -235,6 +235,25 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
         gui.spare_pool().shutdown()
         # Update rules used int he auto adder
         gui.auto_adder.read_rules()
+
+
+def find_tests():
+    import tempfile
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class TestAddingPrefs(unittest.TestCase):
+        def test_auto_add_not_confirmed(self):
+            with tempfile.TemporaryDirectory() as path:
+                w = SimpleNamespace(opt_auto_add_path=SimpleNamespace(text=lambda: path, setText=lambda x: None))
+                with patch('calibre.gui2.preferences.adding.gprefs', {'auto_add_path': ''}), patch(
+                    'calibre.gui2.preferences.adding.question_dialog', return_value=False
+                ):
+                    # Answering No must abort the whole commit, not silently drop the changes
+                    self.assertRaises(AbortCommit, ConfigWidget.commit, w)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestAddingPrefs)
 
 
 if __name__ == '__main__':

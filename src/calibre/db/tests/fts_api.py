@@ -172,6 +172,24 @@ class FTSAPITest(BaseTest):
         self.ae({x['id'] for x in cache.fts_search('help')}, {2})
         cache.close()
 
+    def test_fts_search_empty_library(self):
+        from calibre.db.cli.cmd_fts_search import implementation
+        from calibre.db.legacy import create_backend
+
+        path = self.mkdtemp()
+        create_backend(path).close()
+        cache = self.init_cache(path)
+        fts = cache.enable_fts()
+        self.wait_for_fts_to_finish(fts)
+        self.ae(cache.fts_indexing_progress()[:2], (0, 0))
+        adata = {
+            'restrict_to': None, 'threshold': 0.1, 'include_snippets': False, 'use_stemming': True,
+            'start_marker': '[', 'end_marker': ']',
+        }
+        results, metadata = implementation(cache, None, 'help', adata)
+        self.ae((list(results), metadata), ([], {}))
+        cache.close()
+
     def test_fts_triggers(self):
         cache = self.init_cache()
         # the cache fts jobs will clear dirtied flag so disable it

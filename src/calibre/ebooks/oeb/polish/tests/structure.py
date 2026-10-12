@@ -452,6 +452,23 @@ class Structure(BaseTest):
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0].level, WARN)
 
+    def test_compress_webp_uses_webp_quality(self):
+        from queue import Queue
+        from threading import Event
+        from unittest.mock import patch
+
+        from calibre.ebooks.oeb.polish.images import Worker
+
+        path = os.path.join(self.tdir, 'a.webp')
+        with open(path, 'wb') as f:
+            f.write(b'x')
+        abort = Event()
+        abort.set()  # the worker thread exits at once, we call compress() directly
+        worker = Worker(abort, 'test', Queue(), {}, 90, 40, lambda name: None)
+        with patch('calibre.utils.img.encode_webp') as encode_webp:
+            worker.compress('a.webp', path, 'image/webp')
+        self.assertEqual(encode_webp.call_args.kwargs['quality'], 40)
+
 
 def find_tests():
     import unittest

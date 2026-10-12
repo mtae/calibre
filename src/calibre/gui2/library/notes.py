@@ -132,7 +132,7 @@ class ResultsList(QTreeWidget):
         result = None
         if item is not None:
             result = item.data(0, Qt.ItemDataRole.UserRole)
-        if result is not None:
+        if isinstance(result, dict):
             name = current_db().get_item_name(result['field'], result['item_id']) or ''
             m.addAction(QIcon.ic('edit_input.png'), _('Edit notes for {}').format(name), partial(self.edit_note, item))
         results = tuple(self.selected_results())

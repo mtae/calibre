@@ -336,7 +336,7 @@ class TOC(QStandardItemModel):
             cq['items'][cq['index']].set_current_search_result(False)
         if cq['text'] != query:
             items = tuple(self.find_items(query))
-            cq.update({'text': query, 'items': items, 'index': -1})
+            cq.update({'text': query, 'items': items, 'index': -1 if delta > 0 else 0})
         num = len(cq['items'])
         if num > 0:
             cq['index'] = (cq['index'] + delta + num) % num
@@ -381,3 +381,39 @@ class TOC(QStandardItemModel):
         for item in self.all_items:
             lines.append(' ' * (4 * item.depth) + (item.title or ''))
         return '\n'.join(lines)
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    class Item:
+        def __init__(self):
+            self.is_current = False
+
+        def set_current_search_result(self, yes):
+            self.is_current = yes
+
+    class TOCSearchTest(unittest.TestCase):
+        def test_toc_search(self):
+            items = [Item() for i in range(3)]
+            model = SimpleNamespace(
+                current_query={'text': '', 'index': -1, 'items': ()}, find_items=lambda q: items, indexFromItem=lambda x: x
+            )
+
+            def search(query, delta):
+                return TOC.search(model, query, delta)
+
+            # The first backward step from a new query must select the last match
+            self.assertIs(search('a', -1), items[2])
+            self.assertIs(search('a', -1), items[1])
+            self.assertIs(search('a', 1), items[2])
+            self.assertIs(search('a', 1), items[0])
+            self.assertIs(search('a', -1), items[2])
+            # and the first forward step the first match
+            self.assertIs(search('b', 1), items[0])
+            self.assertEqual([x.is_current for x in items], [True, False, False])
+            self.assertIs(search('c', -1), items[2])
+            self.assertEqual([x.is_current for x in items], [False, False, True])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TOCSearchTest)

@@ -38,7 +38,7 @@ def get_metadata(stream, extract_cover=True):
     adv = 0
     title = None
     author = None
-    pubdate = 0
+    pubdate = None
     for i in range(record_count):
         try:
             type, length = struct.unpack_from('>HH', section_data, 2 + adv)
@@ -66,7 +66,8 @@ def get_metadata(stream, extract_cover=True):
     if author:
         author = author.replace(b'\0', b'').decode(default_encoding, 'replace')
         mi.authors = author.split(',')
-    mi.pubdate = datetime.fromtimestamp(pubdate, tz=local_tz)
+    if pubdate is not None:
+        mi.pubdate = datetime.fromtimestamp(pubdate, tz=local_tz)
 
     return mi
 
@@ -101,5 +102,10 @@ def find_tests():
             self.assertEqual(mi.title, 'Tést')
             self.assertEqual(mi.authors, ['Ä Author'])
             self.assertEqual(int(mi.pubdate.timestamp()), pubdate)
+
+        def test_plucker_no_pubdate(self):
+            mi = get_metadata(build_pdb([(5, b'Test\0')]))
+            self.assertEqual(mi.title, 'Test')
+            self.assertIsNone(mi.pubdate)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

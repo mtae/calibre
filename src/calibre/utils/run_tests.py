@@ -900,6 +900,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.actions.add import find_tests
 
         a(find_tests())
+        from calibre.gui2.dialogs.authors_edit import find_tests
+
+        a(find_tests())
         if iswindows:
             from calibre.utils.windows.wintest import find_tests
 

@@ -185,8 +185,10 @@ def sendmail(
     from email.message import Message
 
     if relay is None:
+        ans = None
         for x in to:
-            return sendmail_direct(from_, x, msg, timeout, localhost, verbose)
+            ans = sendmail_direct(from_, x, msg, timeout, localhost, verbose)
+        return ans
     timeout = None  # Non-blocking sockets sometimes don't work
     port = int(port)
     if port < 0:
@@ -406,6 +408,20 @@ def config(defaults=None):
     c.add_opt('relay_password')
     c.add_opt('encryption', default='TLS', choices=['TLS', 'SSL'])
     return c
+
+
+def find_tests():
+    import unittest
+    from unittest.mock import patch
+
+    class TestSMTP(unittest.TestCase):
+        def test_direct_sendmail_reaches_all_recipients(self):
+            sent = []
+            with patch(f'{__name__}.sendmail_direct', lambda from_, to, *a: sent.append(to)):
+                sendmail('msg', 'a@x.com', ['b@y.com', 'c@z.com'])
+            self.assertEqual(sent, ['b@y.com', 'c@z.com'])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestSMTP)
 
 
 if __name__ == '__main__':

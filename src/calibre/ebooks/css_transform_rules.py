@@ -268,7 +268,7 @@ def validate_rule(rule):
             ' for example, instead of font, use font-family, instead of margin, use margin-top, etc.'
         ).format(rule['property'])
     if not rule['query'] and mt != '*':
-        _('Query required'), _('You must specify a value for the CSS property to match')
+        return _('Query required'), _('You must specify a value for the CSS property to match')
     if mt not in MATCH_TYPE_MAP:
         return _('Unknown match type'), _('The match type %s is not known') % mt
     if 'matches' in mt:
@@ -493,6 +493,16 @@ def test(return_tests=False):  # {{{
                 'action_data': 'color: red; a: b',
             }
             self.ae(rule, next(import_rules(export_rules([rule]))))
+
+        def test_validate_rule_query_required(self):
+            rule = {'property': 'color', 'match_type': 'matches', 'query': '', 'action': 'remove', 'action_data': ''}
+            for mt in ('is', 'is_not', 'matches', 'not_matches'):
+                rule['match_type'] = mt
+                self.assertTrue(validate_rule(rule)[0], f'A blank query was accepted for match type: {mt}')
+            rule['match_type'] = '*'
+            self.ae(validate_rule(rule), (None, None))
+            rule['match_type'], rule['query'] = 'matches', 'red'
+            self.ae(validate_rule(rule), (None, None))
 
     tests = unittest.defaultTestLoader.loadTestsFromTestCase(TestTransforms)
     if return_tests:

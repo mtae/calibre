@@ -153,7 +153,11 @@ class ResultsList(QTreeWidget):
         item = self.currentItem()
         if item is None:
             return
-        i = int(item.data(0, Qt.ItemDataRole.UserRole + 1))
+        i = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if i is None:  # a section header is current
+            self.setCurrentItem(self.item_map[-1 if backwards else 0])
+            return
+        i = int(i)
         i += -1 if backwards else 1
         i %= self.number_of_results
         self.setCurrentItem(self.item_map[i])
@@ -620,6 +624,22 @@ def find_tests():
             with patch.dict(sys.modules, {'calibre.gui2.ui': MagicMock(get_gui=lambda **kw: gui)}):
                 NotesBrowser.search_books(browser)
             gui.search.set_search_string.assert_called_once_with('authors:"=Author B" OR tags:"=Say \\"hi\\""')
+
+        def test_show_next_from_section_header(self):
+            results = [result_item('tags', 'a', 0), result_item('tags', 'b', 1), result_item('tags', 'c', 2)]
+            lst = MagicMock()
+            lst.number_of_results = len(results)
+            lst.item_map = results
+            lst.currentItem.return_value = section_item('tags')
+            ResultsList.show_next(lst)
+            lst.setCurrentItem.assert_called_with(results[0])
+            ResultsList.show_next(lst, backwards=True)
+            lst.setCurrentItem.assert_called_with(results[-1])
+            lst.currentItem.return_value = results[1]
+            ResultsList.show_next(lst)
+            lst.setCurrentItem.assert_called_with(results[2])
+            ResultsList.show_next(lst, backwards=True)
+            lst.setCurrentItem.assert_called_with(results[0])
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestNotesBrowser)
 

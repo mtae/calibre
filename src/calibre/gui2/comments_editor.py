@@ -1795,6 +1795,7 @@ class Editor(QWidget):  # {{{
             if self.wyswyg_dirty:
                 self.code_edit.setPlainText(self.editor.html)
                 self.wyswyg_dirty = False
+                self.source_dirty = False  # setPlainText emitted textChanged
         elif index == 0:  # changing to wyswyg
             if self.source_dirty:
                 self.editor.html = to_plain_text(self.code_edit)

@@ -1135,7 +1135,7 @@ class Worker(Thread):  # Get details {{{
                 ans = self.lang_map.get(raw, None)
                 if ans:
                     return ans
-                ans = canonicalize_lang(ans)
+                ans = canonicalize_lang(raw)
                 if ans:
                     return ans
 
@@ -2095,3 +2095,18 @@ def manual_tests(domain, **kw):  # {{{
 
 
 # }}}
+
+
+def find_tests():
+    import unittest
+
+    from lxml import html
+
+    class Test(unittest.TestCase):
+        def test_amazon_parse_language(self):
+            worker = Worker('', None, None, None, 0, 'com', None)
+            for name, lang in (('German', 'deu'), ('Polish', 'pol'), ('Not a language', None)):
+                root = html.fromstring(f'<div><span>Language:</span> {name}, Other</div>')
+                self.assertEqual(worker.parse_language(root), lang, name)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

@@ -34,7 +34,7 @@ is not specified on the command line, it will be read from STDIN.
     if len(args) > 2:
         pw = args[2]
     else:
-        pw = sys.stdin.read()
+        pw = sys.stdin.read().rstrip('\r\n')
     user_manager.add_user(username, pw, readonly=opts.readonly)
 
 
@@ -225,7 +225,7 @@ is not specified on the command line, it will be read from STDIN.
     if len(args) > 2:
         pw = args[2]
     else:
-        pw = sys.stdin.read()
+        pw = sys.stdin.read().rstrip('\r\n')
     user_manager.change_password(username, pw)
 
 

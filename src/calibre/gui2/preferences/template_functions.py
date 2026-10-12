@@ -565,6 +565,7 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
                     _('The name {} is already used by a template function').format(name),
                     show=True,
                 )
+                return
         try:
             prog = str(self.te_textbox.toPlainText())
             if not prog.startswith(('program:', 'python:')):
@@ -672,6 +673,22 @@ def find_tests():
                 changed_signal=SimpleNamespace(emit=lambda: None),
                 te_name=text('test_create_func'),
                 te_textbox=text('def evaluate(self, formatter, kwargs, mi, locals):\n    return ""'),
+                template_editor=SimpleNamespace(new_doc=text('')),
+                st_funcs={},
+                st_build_function_names_box=lambda **kw: None,
+            )
+            with patch(f'{__name__}.error_dialog') as error, patch(f'{__name__}.compile_user_function') as compile_func:
+                ConfigWidget.st_create_button_clicked(this)
+            self.assertEqual(error.call_count, 1)
+            compile_func.assert_not_called()
+            self.assertEqual(this.st_funcs, {})
+
+        def test_create_with_template_function_name(self):
+            this = SimpleNamespace(
+                gui=None,
+                changed_signal=SimpleNamespace(emit=lambda: None),
+                te_name=text('strcat'),
+                te_textbox=text('program: 1'),
                 template_editor=SimpleNamespace(new_doc=text('')),
                 st_funcs={},
                 st_build_function_names_box=lambda **kw: None,

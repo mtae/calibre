@@ -1099,7 +1099,7 @@ class MetadataSingleDialogAlt1(MetadataSingleDialogBase):  # {{{
 
         tl.addWidget(self.swap_title_author_button, 0, 0, 2, 1)
         tl.addWidget(self.manage_authors_button, 2, 0, 1, 1)
-        tl.addWidget(self.series_editor_button, 6, 0, 1, 1)
+        tl.addWidget(self.series_editor_button, 4, 0, 1, 1)
         tl.addWidget(self.tags_editor_button, 6, 0, 1, 1)
         tl.addWidget(self.publisher_editor_button, 9, 0, 1, 1)
         tl.addWidget(self.paste_isbn_button, 12, 0, 1, 1)

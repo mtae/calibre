@@ -12,7 +12,7 @@ def unsmarten(txt):
     txt = re.sub(r'&#188;|&frac14;|¼', r'{1/4}', txt)  # quarter
     txt = re.sub(r'&#189;|&frac12;|½', r'{1/2}', txt)  # half
     txt = re.sub(r'&#190;|&frac34;|¾', r'{3/4}', txt)  # three-quarter
-    txt = re.sub(r'&#192;|&Agrave;|À', r'{A`)}', txt)  # A-grave
+    txt = re.sub(r'&#192;|&Agrave;|À', r'{A`}', txt)  # A-grave
     txt = re.sub(r'&#193;|&Aacute;|Á', r"{A'}", txt)  # A-acute
     txt = re.sub(r'&#194;|&Acirc;|Â', r'{A^}', txt)  # A-circumflex
     txt = re.sub(r'&#195;|&Atilde;|Ã', r'{A~}', txt)  # A-tilde
@@ -122,3 +122,15 @@ def unsmarten(txt):
     # txt = re.sub(r'\n  \n',   r'\n<br />\n',  txt)  # blank paragraph - br tag
 
     return txt
+
+
+def find_tests():
+    import unittest
+
+    class Test(unittest.TestCase):
+        def test_unsmarten_grave_accents(self):
+            for src in ('À', '&Agrave;', '&#192;'):
+                self.assertEqual(unsmarten(src), '{A`}')
+            self.assertEqual(unsmarten('È'), '{E`}')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

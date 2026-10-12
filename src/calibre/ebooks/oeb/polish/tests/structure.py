@@ -439,6 +439,19 @@ class Structure(BaseTest):
         self.assertEqual(sheet.cssRules[1].cssRules[0].selectorText, f'p#{nid}, [id="{nid}"]')
         self.assertEqual(sheet.cssRules[2].selectorText, '#id_x')
 
+    def test_empty_nav_is_warning(self):
+        from calibre.ebooks.oeb.polish.check.base import WARN
+        from calibre.ebooks.oeb.polish.check.opf import EmptyNav, check_opf
+
+        nav = (
+            '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+            '<body><nav epub:type="toc"><ol/></nav></body></html>'
+        )
+        c = self.create_epub([cmi('nav.html', nav, 'nav')])
+        errors = [e for e in check_opf(c) if isinstance(e, EmptyNav)]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].level, WARN)
+
 
 def find_tests():
     import unittest

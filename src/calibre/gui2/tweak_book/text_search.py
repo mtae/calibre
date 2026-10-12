@@ -231,7 +231,7 @@ def find_text_in_chunks(pat, chunks):
             continue  # this chunk ends before start
         if start_pos is None:
             if contains(clen, start):
-                start_pos = chunk_start + (start - offset)
+                start_pos = chunk_start + utf16_length(chunk[: start - offset])
         if start_pos is not None:
             if contains(clen, after - 1):
                 end_pos = chunk_start + utf16_length(chunk[: after - offset])
@@ -240,3 +240,17 @@ def find_text_in_chunks(pat, chunks):
         if offset > after:
             break  # the next chunk starts after end
     return -1, -1
+
+
+def find_tests():
+    import re
+    import unittest
+
+    class TestTextSearch(unittest.TestCase):
+        def test_find_text_in_chunks_utf16(self):
+            # chunk positions are in UTF-16 code units, an emoji takes two
+            pat = re.compile(r'b')
+            self.assertEqual(find_text_in_chunks(pat, [('\U0001F600ab', 0)]), (3, 4))
+            self.assertEqual(find_text_in_chunks(pat, [('x', 0), ('\U0001F600ab', 1)]), (4, 5))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestTextSearch)

@@ -458,6 +458,24 @@ class WritingTest(BaseTest):
 
     # }}}
 
+    def test_restore_error_report(self):  # {{{
+        "Test that the traceback of each failed directory is reported once"
+        from calibre.db.restore import Restore
+        from calibre.ptempfile import TemporaryDirectory
+
+        class FailingRestore(Restore):
+            def scan_library(self):
+                raise Exception('Something bad happened')
+
+        with TemporaryDirectory() as tdir:
+            restorer = FailingRestore(tdir)
+            restorer.failed_dirs = [('dir1', 'traceback1'), ('dir2', 'traceback2')]
+            restorer.run()
+        for dirpath, tb in restorer.failed_dirs:
+            self.assertEqual(restorer.tb.count(f'Failed to restore: {dirpath}\n{tb}'), 1)
+
+    # }}}
+
     def test_set_cover(self):  # {{{
         "Test setting of cover"
         cache = self.init_cache()

@@ -820,6 +820,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ai.openai_compatible.backend import find_tests
 
         a(find_tests())
+        from calibre.ai.openai.backend import find_tests
+
+        a(find_tests())
         from calibre.ai.venice.backend import find_tests
 
         a(find_tests())

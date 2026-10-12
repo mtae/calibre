@@ -253,6 +253,8 @@ class AddDictionary(QDialog):  # {{{
 
     def _process_online_download(self):
         data = self.combobox_online.currentData()
+        if data is None:
+            return error_dialog(self, _('No language selected'), _('You must choose a language to download'), show=True)
         nick = 'online-' + data['name']
         directory = data['directory']
         if nick in {d.name for d in custom_dictionaries()}:

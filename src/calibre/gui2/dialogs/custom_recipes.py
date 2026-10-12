@@ -428,7 +428,7 @@ class BasicRecipe(QWidget):  # {{{
         if not title:
             return error_dialog(self, _('No feed title'), _('You must specify a title for the feed'), show=True)
         url = self.feed_url.text().strip()
-        if not title:
+        if not url:
             return error_dialog(self, _('No feed URL'), _('You must specify a URL for the feed'), show=True)
         QListWidgetItem(f'{title} - {url}', self.feeds).setData(Qt.ItemDataRole.UserRole, (title, url))
         self.feed_title.clear(), self.feed_url.clear()

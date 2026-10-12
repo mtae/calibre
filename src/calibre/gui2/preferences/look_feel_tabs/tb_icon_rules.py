@@ -846,7 +846,7 @@ class TbIconRulesTab(LazyConfigWidgetBase, Ui_Form):
                         os.remove(path)
                     except Exception:
                         pass
-                tbvip[cat_item.lookup_name].pop(value_text, None)
+                tbvip.get(cat_item.lookup_name, {}).pop(value_text, None)
                 continue
 
             if cat_item.is_new:

@@ -208,6 +208,31 @@ class TestAuth(BaseTest):
 
     # }}}
 
+    def test_newest_book_ids_invalid_restriction(self):  # {{{
+        from calibre.db.legacy import create_backend
+        from calibre.ebooks.metadata.book.base import Metadata
+        from calibre.srv.handler import Handler
+        from calibre.srv.opts import Options
+
+        Data = namedtuple('Data', 'username')
+        with TemporaryDirectory() as base:
+            path = os.path.join(base, 'l1')
+            create_backend(path).close()
+            ctx = Handler((path,), Options(userdb=':memory:')).router.ctx
+            db = ctx.get_library(Data(None))
+            db.create_book_entry(Metadata('One', ['A']))
+            db.create_book_entry(Metadata('Two', ['B']))
+            ctx.user_manager.add_user('a', 'a')
+            self.ae(ctx.newest_book_ids(Data('a'), db), [2, 1])
+            ctx.user_manager.update_user_restrictions('a', {'library_restrictions': {'l1': 'title:One'}})
+            self.ae(ctx.newest_book_ids(Data('a'), db), [1])
+            # an invalid restriction must fail closed, not show all books
+            ctx.user_manager.update_user_restrictions('a', {'library_restrictions': {'l1': '(('}})
+            self.ae(ctx.newest_book_ids(Data('a'), db), [])
+            db.close()
+
+    # }}}
+
     def test_manage_users_cli_stdin_password(self):  # {{{
         import io
         from unittest.mock import patch

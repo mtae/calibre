@@ -79,7 +79,7 @@ class EmailAccounts(QAbstractTableModel):  # {{{
         elif col == 3:
 
             def key(account_key):
-                return numeric_sort_key(as_unicode(self.accounts[account_key][0]) or '')
+                return bool(self.accounts[account_key][1])
 
         elif col == 4:
 
@@ -310,6 +310,21 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
         from calibre.gui2.email import gui_sendmail
 
         gui_sendmail.calculate_rate_limit()
+
+
+def find_tests():
+    import unittest
+
+    class TestEmailAccounts(unittest.TestCase):
+        def test_sort_by_auto_send(self):
+            accounts = {'a@x.com': ['AZW3', True, False], 'b@x.com': ['EPUB', False, False], 'c@x.com': ['MOBI', True, False]}
+            model = EmailAccounts(accounts, {})
+            model.sort(3, Qt.SortOrder.AscendingOrder)
+            self.assertEqual(model.account_order, ['b@x.com', 'a@x.com', 'c@x.com'], 'unchecked rows come first')
+            model.sort(3, Qt.SortOrder.DescendingOrder)
+            self.assertEqual(model.account_order, ['a@x.com', 'c@x.com', 'b@x.com'], 'checked rows come first')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestEmailAccounts)
 
 
 if __name__ == '__main__':

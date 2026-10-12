@@ -804,6 +804,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.store.config.chooser.models import find_tests
 
         a(find_tests())
+        from calibre.gui2.preferences.template_functions import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html_entities import find_tests
 
         a(find_tests())

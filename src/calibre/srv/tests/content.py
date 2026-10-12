@@ -384,6 +384,12 @@ class ContentTest(LibraryBaseTest):
 
     # }}}
 
+    def test_parse_smil_time(self):
+        from calibre.srv.render_book import parse_smil_time
+
+        for x, expected in {'2s': 2, '1.5s': 1.5, '500ms': 0.5, '1.5min': 90, '2h': 7200, '1:02:03.5': 3723.5, '2:30': 150}.items():
+            self.assertAlmostEqual(parse_smil_time(x), expected, msg=x)
+
     def test_last_read_cache(self):  # {{{
         from calibre.srv.last_read import last_read_cache, path_cache
 

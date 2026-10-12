@@ -777,6 +777,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.rtf2xml.ParseRtf import find_tests
 
         a(find_tests())
+        from calibre.ebooks.pml.pmlconverter import find_tests
+
+        a(find_tests())
         from calibre.ebooks.metadata.html import find_tests
 
         a(find_tests())

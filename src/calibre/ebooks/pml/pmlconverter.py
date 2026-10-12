@@ -598,7 +598,7 @@ class PML_HTMLizer:
                         # inside of ="" so we don't have do special processing
                         # for C.
                         t = ''
-                        level = 0
+                        level = '0'
                         if c in 'XC':
                             level = line.read(1)
                         id = f'pml_toc-{len(self.toc)}'
@@ -781,3 +781,17 @@ def footnote_to_html(id, pml):
 
 def sidebar_to_html(id, pml):
     return footnote_sidebar_to_html('sb', id, pml)
+
+
+def find_tests():
+    import unittest
+
+    class PMLConverterTest(unittest.TestCase):
+        def test_chapter_codes_are_top_level_toc_entries(self):
+            hizer = PML_HTMLizer()
+            hizer.parse_pml('\\xChapter One\\x\n\\X1Section A\\X1\n\\xChapter Two\\x\n\\X1Section B\\X1\n', 'index.html')
+            toc = hizer.get_toc()
+            self.assertEqual([(t.text, [c.text for c in t]) for t in toc], [
+                ('Chapter One', ['Section A']), ('Chapter Two', ['Section B'])])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(PMLConverterTest)

@@ -885,6 +885,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.compression.palmdoc import find_tests
 
         a(find_tests())
+        from calibre.ebooks.oeb.reader import find_tests
+
+        a(find_tests())
         from calibre.ebooks.lrf.html.color_map import find_tests
 
         a(find_tests())

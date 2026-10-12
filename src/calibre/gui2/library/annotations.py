@@ -1504,7 +1504,11 @@ class ResultsList(QTreeWidget):
         item = self.currentItem()
         if item is None:
             return
-        i = int(item.data(0, Qt.ItemDataRole.UserRole + 1))
+        i = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if i is None:  # a group header is current
+            self.setCurrentItem(self.item_map[-1 if backwards else 0])
+            return
+        i = int(i)
         i += -1 if backwards else 1
         i %= self.number_of_results
         self.setCurrentItem(self.item_map[i])

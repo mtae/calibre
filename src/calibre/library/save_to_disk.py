@@ -354,7 +354,7 @@ def update_metadata(mi, fmt, stream, plugboards, cdata, error_report=None, plugb
             error_report(fmt, traceback.format_exc())
 
 
-def do_save_book_to_disk(db, book_id, mi, plugboards, formats, root, opts, length, extra_files=()):
+def do_save_book_to_disk(db, book_id, mi, plugboards, formats, root, opts, length, extra_files=(), used_components=None):
     originals = mi.cover, mi.pubdate, mi.timestamp
     formats_written = False
     try:
@@ -364,6 +364,13 @@ def do_save_book_to_disk(db, book_id, mi, plugboards, formats, root, opts, lengt
             mi.timestamp = as_local_time(mi.timestamp)
 
         components = get_path_components(opts, mi, book_id, length)
+        if used_components is not None:
+            # Do not overwrite the files of another book saved in this run, see ensure_unique_components() in gui2/save.py
+            name, num = components[-1], 0
+            while tuple(components) in used_components:
+                num += 1
+                components[-1] = f'{name} ({num})'
+            used_components.add(tuple(components))
         base_path = os.path.join(root, *components)
         base_name = os.path.basename(base_path)
         dirpath = os.path.dirname(base_path)

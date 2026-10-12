@@ -208,6 +208,28 @@ class TestAuth(BaseTest):
 
     # }}}
 
+    def test_manage_users_cli_stdin_password(self):  # {{{
+        import io
+        from unittest.mock import patch
+
+        from calibre.srv.manage_users_cli import main
+        from calibre.srv.users import UserManager
+
+        um = UserManager(':memory:')
+        for newline in ('\n', '\r\n'):
+            with patch('sys.stdin', io.StringIO('secret' + newline)):
+                main(um, ['add', 'u'])
+            self.assertEqual(um.get('u'), 'secret')
+            with patch('sys.stdin', io.StringIO('other' + newline)):
+                main(um, ['chpass', 'u'])
+            self.assertEqual(um.get('u'), 'other')
+            um.remove_user('u')
+        main(um, ['add', 'u', 'secret'])
+        main(um, ['chpass', 'u', 'other'])
+        self.assertEqual(um.get('u'), 'other')
+
+    # }}}
+
     def test_digest_auth(self):  # {{{
         "Test HTTP Digest auth"
         from calibre.srv.http_request import normalize_header_name

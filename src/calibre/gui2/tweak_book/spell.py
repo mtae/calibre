@@ -1034,10 +1034,12 @@ class WordsModel(QAbstractTableModel):
             del self.items[row]
             self.endRemoveRows()
         elif not should_be_filtered and row == -1:
-            self.items.append(w)
-            self.do_sort()
-            row = self.row_for_word(w)
+            items = self.items + [w]
+            col, reverse = self.sort_on
+            items.sort(key=self.sort_key(col), reverse=reverse)
+            row = items.index(w)
             self.beginInsertRows(QModelIndex(), row, row)
+            self.items = items
             self.endInsertRows()
         self.dataChanged.emit(self.index(row, 3), self.index(row, 3))
 
@@ -1881,6 +1883,16 @@ def find_tests():
             m.replace_word(('ccc', self.locale), 'bbb')  # merged into an existing word
             self.assertNotIn(('ccc', self.locale), m.spell_map)
             self.assertEqual(m.counts, (1, 1))
+
+        def test_update_word_notifies_before_insert(self):
+            m = self.model('aaa', 'ccc')
+            new = ('bbb', self.locale)
+            m.words[new], m.spell_map[new] = m.words[('aaa', self.locale)], False
+            seen = []
+            m.rowsAboutToBeInserted.connect(lambda parent, first, last: seen.append((first, len(m.items))))
+            m.update_word(new)
+            self.assertEqual(seen, [(1, 2)])
+            self.assertEqual(m.row_for_word(new), 1)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestWordsModel)
 

@@ -469,6 +469,14 @@ class Structure(BaseTest):
             worker.compress('a.webp', path, 'image/webp')
         self.assertEqual(encode_webp.call_args.kwargs['quality'], 40)
 
+    def test_toc_from_links_removes_consecutive_dead_links(self):
+        from calibre.ebooks.oeb.polish.toc import from_links
+
+        links = ''.join(f'<a href="missing{x}.html">{x}</a>' for x in 'abc')
+        body = f'<body><p>{links}<a href="#t">d</a></p><h1 id="t">T</h1></body>'
+        c = self.create_epub([cmi('index.html', f'<html xmlns="http://www.w3.org/1999/xhtml">{body}</html>', None)])
+        self.assertEqual([x.title for x in from_links(c)], ['d'])
+
 
 def find_tests():
     import unittest

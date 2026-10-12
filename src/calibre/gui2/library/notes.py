@@ -519,9 +519,9 @@ class NotesBrowser(Dialog):
             r = item.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(r, dict):
                 ival = r['text'].split('\n', 1)[0].replace('"', '\\"')
-                vals.append(ival)
+                vals.append((r['field'], ival))
         if vals:
-            search_expression = ' OR '.join(f'{r["field"]}:"={ival}"' for ival in vals)
+            search_expression = ' OR '.join(f'{field}:"={ival}"' for field, ival in vals)
             from calibre.gui2.ui import get_gui
 
             get_gui(fail_if_absent=True).search.set_search_string(search_expression)
@@ -589,6 +589,39 @@ class NotesBrowser(Dialog):
             a0.ignore()
             return
         return super().keyPressEvent(a0)
+
+
+def find_tests():
+    import sys
+    import unittest
+    from unittest.mock import MagicMock, patch
+
+    def result_item(field, text, number=None):
+        ans = QTreeWidgetItem()
+        ans.setData(0, Qt.ItemDataRole.UserRole, {'field': field, 'text': text})
+        if number is not None:
+            ans.setData(0, Qt.ItemDataRole.UserRole + 1, number)
+        return ans
+
+    def section_item(field):
+        ans = QTreeWidgetItem()
+        ans.setData(0, Qt.ItemDataRole.UserRole, field)
+        return ans
+
+    class TestNotesBrowser(unittest.TestCase):
+        def test_search_books_mixed_fields(self):
+            browser = MagicMock()
+            browser.results_list.selectedItems.return_value = [
+                result_item('authors', 'Author B\nnote'),
+                section_item('tags'),
+                result_item('tags', 'Say "hi"\nnote'),
+            ]
+            gui = MagicMock()
+            with patch.dict(sys.modules, {'calibre.gui2.ui': MagicMock(get_gui=lambda **kw: gui)}):
+                NotesBrowser.search_books(browser)
+            gui.search.set_search_string.assert_called_once_with('authors:"=Author B" OR tags:"=Say \\"hi\\""')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestNotesBrowser)
 
 
 if __name__ == '__main__':

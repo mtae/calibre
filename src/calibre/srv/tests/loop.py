@@ -335,6 +335,22 @@ class LoopTest(BaseTest):
         jm.start_job('simple test', 'calibre.srv.jobs', 'sleep_test', args=(1.0,))
         jm.shutdown(), jm.wait_for_shutdown(monotonic() + 1)
 
+    def test_jobs_manager_no_time_limit(self):
+        "A max_job_time of zero means jobs are never aborted for running too long"
+        from calibre.srv.jobs import JobsManager
+
+        O = namedtuple('O', 'max_jobs max_job_time')
+        jm = JobsManager(O(1, 0), None)
+        job_id = jm.start_job('simple test', 'calibre.srv.jobs', 'sleep_test', args=(1.0,))
+        while jm.job_status(job_id)[0] == 'waiting':
+            time.sleep(0.01)
+        self.assertIn(jm.wait_for_running_job(job_id), (True, None))
+        status, result, tb, was_aborted = jm.job_status(job_id)
+        self.assertEqual(status, 'finished')
+        self.assertFalse(was_aborted)
+        self.assertEqual(result, 1.0)
+        jm.shutdown(), jm.wait_for_shutdown(monotonic() + 1)
+
 
 def find_tests():
     import unittest

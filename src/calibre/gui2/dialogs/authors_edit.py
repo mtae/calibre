@@ -203,8 +203,34 @@ class AuthorsEdit(QDialog):
                     al_it.setText(author)
                 else:
                     self.al.addItem(author)
-                    authors[la] = author
+                    authors[la] = (self.al.count() - 1, author)
         self.author.setText('')
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    class FakeList:
+        def __init__(self, items):
+            self.items = list(items)
+
+        def count(self):
+            return len(self.items)
+
+        def item(self, i):
+            return SimpleNamespace(text=lambda: self.items[i], setText=lambda text: self.items.__setitem__(i, text))
+
+        def addItem(self, text):
+            self.items.append(text)
+
+    class TestAuthorsEdit(unittest.TestCase):
+        def test_add_author_case_change_in_one_batch(self):
+            dialog = SimpleNamespace(al=FakeList(['Alice']), authors=['Alice'], author=SimpleNamespace(text=lambda: 'Bob & bob', setText=lambda text: None))
+            AuthorsEdit.add_author(dialog)
+            self.assertEqual(dialog.al.items, ['Alice', 'bob'])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestAuthorsEdit)
 
 
 if __name__ == '__main__':

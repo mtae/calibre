@@ -600,10 +600,13 @@ class HeuristicProcessor:
         html = re.sub(r'<p[^>/]*/>', '<p> </p>', html)
         # Get rid of empty span, bold, font, em, & italics tags
         fmt_tags = 'font|[ibu]|em|strong'
-        open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*)?>', f'</(?:{fmt_tags})>'
+        open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*+)?>', f'</(?:{fmt_tags})>'
+        # Each \s* here is followed by a tag, which starts with <, or ends the match, so giving
+        # whitespace back never helps. Possessive, the engine no longer tries every way of
+        # dividing a run of whitespace between the \s* in a row, which is cubic.
         for i in range(2):
-            html = re.sub(r'\s*<span[^>]*>\s*(<span[^>]*>\s*</span>){0,2}\s*</span>\s*', ' ', html)
-            html = re.sub(rf'\s*{open_fmt_pat}\s*({open_fmt_pat}\s*{close_fmt_pat}\s*){{0,2}}\s*{close_fmt_pat}', ' ', html)
+            html = re.sub(r'\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
+            html = re.sub(rf'\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
         # delete surrounding divs from empty paragraphs
         html = re.sub(r'<div[^>]*>\s*<p[^>]*>\s*</p>\s*</div>', '<p> </p>', html)
         # Empty heading tags
@@ -1443,5 +1446,19 @@ def find_tests():
                 hp = self.processor(**attrs)
                 self.assertEqual(hp.markup_pre(html), expected, html)
             self.assert_fast(self.processor().markup_pre, '<pre>x' * 250)
+
+        def test_cleanup_markup(self):
+            for attrs, html, expected in (
+                ({}, ('<p>a <span> </span> b</p>\n <span>\n<span> </span></span>\n<p>x <b> </b> <i><i></i></i> y <em>\n</em></p>'), '<p>a b</p> <p>x   y </p>'),
+                ({}, 'start  <font color="red"> </font>  <strong><b></b> </strong> text <u> </u>', 'start   text '),
+                ({}, '<p>nbsp\xa0here</p><p/><o:p> </o:p><st1:city>X</st1:city>', '<p>nbsp here</p><p> </p> X'),
+                ({}, '<span></span><span>x</span><b>bold</b><i> </i>', ' <span>x</span><b>bold</b> '),
+                ({}, '<span> <span> </span> <span></span> </span> after', ' after'),
+                ({}, ('<p><span>  </span></p><div><p> </p></div><h2> </h2><b> <b> </b> </b>  <b>x</b> <i> y </i>'), '<p> </p><p> </p>   <b>x</b> <i> y </i>'),
+            ):
+                hp = self.processor(**attrs)
+                self.assertEqual(hp.cleanup_markup(html), expected, html)
+            pad = ' ' * 700
+            self.assert_fast(self.processor().cleanup_markup, f'<b>{pad}<b>{pad}<i>{pad}x')
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)

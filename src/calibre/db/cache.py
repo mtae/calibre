@@ -2783,8 +2783,7 @@ class Cache:
         string."""
         table = self.fields['authors'].table
         result = []
-        if key_func is icu_lower and hasattr(table.id_map, 'lower_index'):
-            # Maintained by the table, so it is not built for every call
+        if key_func is icu_lower:
             rmap = table.id_map.lower_index()
         else:
             rmap = {key_func(v): k for k, v in table.id_map.items()}
@@ -2966,7 +2965,9 @@ class Cache:
                 else:
                     prepared = [(fmt, stream_or_path, fmt, stream_or_path) for fmt, stream_or_path in format_map.items()]
                 with self.quiet_write_lock:
-                    book_id, fmt_map = self._add_book_in_one_change(mi, prepared, add_duplicates, apply_import_tags, preserve_uuid, dbapi)
+                    # Duplicates were rejected above, before the import plugins ran, so has_book() (a scan of all
+                    # the books) is not run again in create_book_entry()
+                    book_id, fmt_map = self._add_book_in_one_change(mi, prepared, True, apply_import_tags, preserve_uuid, dbapi)
                 if book_id is None:
                     duplicates.append((mi, format_map))
                     continue

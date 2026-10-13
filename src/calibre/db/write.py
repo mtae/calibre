@@ -6,6 +6,7 @@ from datetime import datetime
 from functools import partial
 
 from calibre.constants import preferred_encoding
+from calibre.db.tables import safe_lower
 from calibre.ebooks.metadata import author_to_author_sort, title_sort
 from calibre.utils.date import UNDEFINED_DATE, is_date_undefined, isoformat, parse_date, parse_only_date
 from calibre.utils.icu import lower as icu_lower
@@ -278,25 +279,13 @@ def custom_series_index(book_id_val_map, db, field, *args):
 # Many-One fields {{{
 
 
-def safe_lower(x):
-    try:
-        return icu_lower(x)
-    except TypeError, ValueError, KeyError, AttributeError:
-        return x
-
-
-def rid_map_for(table, kmap_is_lower):
-    """ The map of item (lowercased, if kmap_is_lower) values to ids of the
-    items of table. When possible this is the index maintained by the id_map
-    of the table, not a new dict, so that it is not built again for every
-    book written: callers must not modify it. """
-    id_map = table.id_map
-    if kmap_is_lower:
-        try:
-            return id_map.lower_index()
-        except AttributeError:
-            return {safe_lower(item): item_id for item_id, item in id_map.items()}
-    return {item: item_id for item_id, item in id_map.items()}
+def rid_map_for(table, kmap):
+    """ Map of kmap(item) to item id for the items of table. For safe_lower this is the index kept by
+    table.id_map (it must not be copied or rebuilt for every book written), so it is up to date after
+    items are added to the id_map and must not be modified in other ways. """
+    if kmap is safe_lower:
+        return table.id_map.lower_index()
+    return {kmap(item): item_id for item_id, item in table.id_map.items()}
 
 
 def unused_items(table, candidates, full_scan):
@@ -378,13 +367,12 @@ def many_one(book_id_val_map, db, field, allow_case_change, *args):
     is_custom_series = dt == 'series' and table.name.startswith('#')
 
     # Map values to db ids, including any new values
-    kmap_is_lower = dt in {'text', 'series'}
-    kmap = safe_lower if kmap_is_lower else lambda x: x
-    rid_map = rid_map_for(table, kmap_is_lower)
+    kmap = safe_lower if dt in {'text', 'series'} else lambda x: x
+    rid_map = rid_map_for(table, kmap)
     if len(rid_map) != len(table.id_map):
         # table has some entries that differ only in case, fix it
         table.fix_case_duplicates(db)
-        rid_map = rid_map_for(table, kmap_is_lower)
+        rid_map = rid_map_for(table, kmap)
     val_map = {None: None}
     case_changes = {}
     for val in book_id_val_map.values():
@@ -475,13 +463,12 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
     is_authors = field.name == 'authors'
 
     # Map values to db ids, including any new values
-    kmap_is_lower = dt == 'text'
-    kmap = safe_lower if kmap_is_lower else lambda x: x
-    rid_map = rid_map_for(table, kmap_is_lower)
+    kmap = safe_lower if dt == 'text' else lambda x: x
+    rid_map = rid_map_for(table, kmap)
     if len(rid_map) != len(table.id_map):
         # table has some entries that differ only in case, fix it
         table.fix_case_duplicates(db)
-        rid_map = rid_map_for(table, kmap_is_lower)
+        rid_map = rid_map_for(table, kmap)
     val_map = {}
     case_changes = {}
     book_id_val_map = {k: uniq(vals, kmap) for k, vals in book_id_val_map.items()}

@@ -482,6 +482,42 @@ class WritingTest(BaseTest):
         for dirpath, tb in restorer.failed_dirs:
             self.assertEqual(restorer.tb.count(f'Failed to restore: {dirpath}\n{tb}'), 1)
 
+    def test_restore_notes_in_transaction(self):  # {{{
+        "Test that restoring a library restores all the notes in one transaction, not with a commit for each note"
+        from calibre.db.backend import DB
+        from calibre.db.restore import Restore
+
+        cl = self.cloned_library
+        cache = self.init_cache(cl)
+        notes = {aid: f'a note for the author {aid}' for aid in sorted(cache.all_field_ids('authors'))[:2]}
+        for aid, doc in notes.items():
+            cache.set_notes_for('authors', aid, doc)
+        names = {aid: cache.get_item_name('authors', aid) for aid in notes}
+        cache.dump_metadata()
+        cache.close()
+        commits = []
+        orig = DB.restore_notes
+
+        def restore_notes(db, *args):
+            db.conn.set_commit_hook(lambda: (commits.append(1), False)[1])
+            try:
+                return orig(db, *args)
+            finally:
+                db.conn.set_commit_hook(None)
+
+        DB.restore_notes = restore_notes
+        try:
+            restorer = Restore(cl)
+            restorer.start()
+            restorer.join(60)
+        finally:
+            DB.restore_notes = orig
+        self.assertFalse(restorer.is_alive())
+        cache = self.init_cache(cl)
+        authors = {cache.get_item_name('authors', aid): aid for aid in cache.all_field_ids('authors')}
+        for aid, doc in notes.items():
+            self.assertEqual(cache.notes_for('authors', authors[names[aid]]), doc)
+        self.assertEqual(len(commits), 0, 'restoring the notes commits for every note')
     # }}}
 
     def test_set_cover(self):  # {{{
@@ -1283,7 +1319,7 @@ class WritingTest(BaseTest):
         # whichever way the map was changed
         import random
 
-        from calibre.db.tables import IdMap, _safe_lower
+        from calibre.db.tables import IdMap, safe_lower
         rnd = random.Random(7)
         names = ['a', 'A', 'b', 'B', 'Ünï', 'ünï', 'ÜNÏ', 'x y', 'X Y', 'z']
         m = IdMap()
@@ -1308,10 +1344,12 @@ class WritingTest(BaseTest):
                     m.popitem()
             elif op == 'clear' and rnd.random() < 0.2:
                 m.clear()
-            expected = {_safe_lower(v): k for k, v in m.items()}
+            expected = {safe_lower(v): k for k, v in m.items()}
             if op == 'lookup' or rnd.random() < 0.5:
                 self.assertEqual(expected, m.lower_index(), f'index differs from rebuilt index at step {step} after {history[-5:]}')
+        import copy
         self.assertIs(type(m.copy()), dict)
+        self.assertIs(type(copy.copy(m)), dict)
         self.assertEqual(dict(m), m)
     # }}}
 
@@ -1453,4 +1491,46 @@ class WritingTest(BaseTest):
                     raise ValueError('failed')
         self.assertEqual(expected, observe(cache), 'caches kept the values of a change that was rolled back')
 
+    def test_item_ids_match_db_after_changes(self):  # {{{
+        # Writing a field looks up the ids of items by name, which must give the
+        # same result as the database whatever happened to the items before
+        import random
+        cache = self.init_cache()
+        reader = self.init_cache()  # Reads what the db contains after every operation
+        fields = ('tags', 'authors', 'series', 'publisher')
+        names = ['Alpha', 'alpha', 'ALPHA', 'Béta', 'béta', 'Gamma', 'delta', 'Delta', 'Ünï', 'ünï', 'x, y', 'X, Y']
+        rnd = random.Random(11)
+        history = []
+        for step in range(150):
+            field = rnd.choice(fields)
+            multiple = field in ('tags', 'authors')
+            op = rnd.choice(('set', 'set', 'set', 'set_nocase', 'rename', 'remove_items', 'remove_book', 'add_book'))
+            book_ids = sorted(cache.all_book_ids())
+            history.append((op, field))
+            if op in ('set', 'set_nocase'):
+                bids = rnd.sample(book_ids, min(len(book_ids), rnd.randint(1, 3)))
+                vmap = {b: (rnd.sample(names, rnd.randint(1, 3)) if multiple else rnd.choice(names)) for b in bids}
+                cache.set_field(field, vmap, allow_case_change=op == 'set')
+            elif op == 'rename':
+                ids = sorted(cache.fields[field].table.id_map)
+                if ids:
+                    cache.rename_items(field, {rnd.choice(ids): rnd.choice(names)})
+            elif op == 'remove_items':
+                ids = sorted(cache.fields[field].table.id_map)
+                if ids and field != 'authors':  # Direct removal of authors is not allowed
+                    cache.remove_items(field, rnd.sample(ids, 1))
+            elif op == 'remove_book':
+                if len(book_ids) > 3:
+                    cache.remove_books([rnd.choice(book_ids)])
+            else:
+                mi = Metadata(rnd.choice(names), [rnd.choice(names), rnd.choice(names)])
+                mi.tags, mi.series, mi.publisher = rnd.sample(names, 2), rnd.choice(names), rnd.choice(names)
+                cache.create_book_entry(mi)
+            reader.reload_from_db()
+            for f in fields:
+                t, rt = cache.fields[f].table, reader.fields[f].table
+                where = f'field {f} at step {step} after {history[-4:]}'
+                self.assertEqual(dict(rt.id_map), dict(t.id_map), where)
+                self.assertEqual({k: v for k, v in rt.book_col_map.items() if v}, {k: v for k, v in t.book_col_map.items() if v}, where)
+                self.assertEqual({k: v for k, v in rt.col_book_map.items() if v}, {k: v for k, v in t.col_book_map.items() if v}, where)
     # }}}

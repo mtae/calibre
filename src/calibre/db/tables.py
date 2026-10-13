@@ -48,7 +48,7 @@ ONE_ONE, MANY_ONE, MANY_MANY = range(3)
 null = object()
 
 
-def _safe_lower(x):
+def safe_lower(x):
     try:
         return icu_lower(x)
     except TypeError, ValueError, KeyError, AttributeError:
@@ -57,53 +57,33 @@ def _safe_lower(x):
 
 class IdMap(dict):
     """
-    The map of item ids to item values (id_map) of a table of items such as
-    tags or authors. A dict that can also provide, without a scan of the whole
-    map, the reverse map from lowercased values to item ids (see
-    :meth:`lower_index`).
-
-    Writing a book looks up the ids of its authors, tags, etc. by name, which
-    used to build this reverse map from scratch for every write, a cost
-    proportional to the number of items in the library for every book written.
-    The reverse map is now built once, when first needed, and kept up to date
-    when items are added. Any other change to the map just drops it, so it is
-    rebuilt the next time it is needed and can never be stale, no matter which
-    of the dict methods the changes are made with.
+    The map of item ids to item values (id_map) of a table of items such as tags
+    or authors. It can also provide the reverse map from lowercased values to
+    item ids (see :meth:`lower_index`), which writing a book needs to find the
+    ids of its authors, tags, etc. The reverse map is built once, when first
+    needed, and updated when items are added. Any other change to the map drops
+    it, so it is rebuilt when next needed and can never be stale.
     """
 
     __slots__ = ('_lower_index',)
 
     def __init__(self, *args, **kw):
-        super().__init__(*args, **kw)
         self._lower_index = None
+        super().__init__(*args, **kw)
 
     def lower_index(self):
-        """ The map ``{lowercased value: item id}`` of the items. If several
-        items have the same lowercased value, the one that comes last in the
-        map is used. This is the very dict that is kept up to date, callers
-        must not modify it. """
-        ans = self._lower_index
-        if ans is None:
-            ans = self._lower_index = {_safe_lower(v): k for k, v in self.items()}
-        return ans
+        """ The map {lowercased value: item id}, the item that comes last in the map is used if several
+        have the same lowercased value. This is the dict that is kept up to date, do not modify it. """
+        if self._lower_index is None:
+            self._lower_index = {safe_lower(v): k for k, v in self.items()}
+        return self._lower_index
 
     def __setitem__(self, key, value):
-        li = self._lower_index
-        if li is not None:
+        if self._lower_index is not None:
             if key in self:
-                # The value of an existing item changes
                 self._lower_index = None
             else:
-                try:
-                    lv = _safe_lower(value)
-                    if lv in li:
-                        # Items that differ only in case, let lower_index()
-                        # decide which one is used
-                        self._lower_index = None
-                    else:
-                        li[lv] = key
-                except Exception:
-                    self._lower_index = None
+                self._lower_index[safe_lower(value)] = key
         super().__setitem__(key, value)
 
     def __delitem__(self, key):
@@ -135,7 +115,7 @@ class IdMap(dict):
         return super().__ior__(other)
 
     def __reduce__(self):
-        # Copies and pickles are plain dicts, as id_map always was
+        # Copies are plain dicts, so they cannot share the index
         return dict, (dict(self),)
 
 

@@ -6,6 +6,7 @@ from datetime import datetime
 from functools import partial
 
 from calibre.constants import preferred_encoding
+from calibre.db.tables import safe_lower
 from calibre.ebooks.metadata import author_to_author_sort, title_sort
 from calibre.utils.date import UNDEFINED_DATE, is_date_undefined, isoformat, parse_date, parse_only_date
 from calibre.utils.icu import lower as icu_lower
@@ -276,11 +277,13 @@ def custom_series_index(book_id_val_map, db, field, *args):
 # Many-One fields {{{
 
 
-def safe_lower(x):
-    try:
-        return icu_lower(x)
-    except TypeError, ValueError, KeyError, AttributeError:
-        return x
+def rid_map_for(table, kmap):
+    """ Map of kmap(item) to item id for the items of table. For safe_lower this is the index kept by
+    table.id_map (it must not be copied or rebuilt for every book written), so it is up to date after
+    items are added to the id_map and must not be modified in other ways. """
+    if kmap is safe_lower:
+        return table.id_map.lower_index()
+    return {kmap(item): item_id for item_id, item in table.id_map.items()}
 
 
 def get_db_id(val, db, m, table, kmap, rid_map, allow_case_change, case_changes, val_map, is_authors=False):
@@ -330,11 +333,11 @@ def many_one(book_id_val_map, db, field, allow_case_change, *args):
 
     # Map values to db ids, including any new values
     kmap = safe_lower if dt in {'text', 'series'} else lambda x: x
-    rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+    rid_map = rid_map_for(table, kmap)
     if len(rid_map) != len(table.id_map):
         # table has some entries that differ only in case, fix it
         table.fix_case_duplicates(db)
-        rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+        rid_map = rid_map_for(table, kmap)
     val_map = {None: None}
     case_changes = {}
     for val in book_id_val_map.values():
@@ -416,11 +419,11 @@ def many_many(book_id_val_map, db, field, allow_case_change, *args):
 
     # Map values to db ids, including any new values
     kmap = safe_lower if dt == 'text' else lambda x: x
-    rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+    rid_map = rid_map_for(table, kmap)
     if len(rid_map) != len(table.id_map):
         # table has some entries that differ only in case, fix it
         table.fix_case_duplicates(db)
-        rid_map = {kmap(item): item_id for item_id, item in table.id_map.items()}
+        rid_map = rid_map_for(table, kmap)
     val_map = {}
     case_changes = {}
     book_id_val_map = {k: uniq(vals, kmap) for k, vals in book_id_val_map.items()}

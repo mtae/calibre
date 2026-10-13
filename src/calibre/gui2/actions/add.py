@@ -315,7 +315,8 @@ class AddAction(InterfaceAction):
         if not root:
             return
         lp = os.path.normcase(os.path.abspath(self.gui.current_db.library_path))
-        if lp.startswith(os.path.normcase(os.path.abspath(root)) + os.pathsep):
+        r = os.path.normcase(os.path.abspath(root))
+        if lp == r or lp.startswith(r.rstrip(os.sep) + os.sep):
             return error_dialog(
                 self.gui,
                 _('Cannot add'),
@@ -793,3 +794,30 @@ class AddAction(InterfaceAction):
 
             callback = partial(self._add_from_device_adder, on_card=None, model=view.model())
             Adder(ok_paths, db=self.gui.current_db, parent=self.gui, callback=callback, pool=self.gui.spare_pool())
+
+
+def find_tests():
+    import tempfile
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    class TestAddRecursive(unittest.TestCase):
+        def test_add_recursive_refuses_folder_containing_library(self):
+            with tempfile.TemporaryDirectory() as base:
+                lib = os.path.join(base, 'Calibre Library')
+                os.mkdir(lib)
+                gui = SimpleNamespace(current_db=SimpleNamespace(library_path=lib))
+                for root, refused in (
+                    (base, True),
+                    (lib, True),
+                    (os.path.join(base, 'Calibre'), False),
+                    (os.path.join(base, 'Calibre Library 2'), False),
+                ):
+                    action = SimpleNamespace(gui=gui, do_add_recursive=Mock())
+                    with patch('calibre.gui2.actions.add.choose_dir', return_value=root), patch('calibre.gui2.actions.add.error_dialog') as ed:
+                        AddAction.add_recursive(action, False)
+                    self.assertEqual(ed.called, refused, root)
+                    self.assertEqual(action.do_add_recursive.called, not refused, root)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestAddRecursive)

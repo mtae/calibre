@@ -44,6 +44,8 @@ class ItemDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index):
         authors = string_to_authors(str(editor.text()))
+        if not authors:
+            return
         model.setData(index, authors[0])
         self.edited.emit(index.row())
 
@@ -203,8 +205,49 @@ class AuthorsEdit(QDialog):
                     al_it.setText(author)
                 else:
                     self.al.addItem(author)
-                    authors[la] = author
+                    authors[la] = (self.al.count() - 1, author)
         self.author.setText('')
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    class FakeList:
+        def __init__(self, items):
+            self.items = list(items)
+
+        def count(self):
+            return len(self.items)
+
+        def item(self, i):
+            return SimpleNamespace(text=lambda: self.items[i], setText=lambda text: self.items.__setitem__(i, text))
+
+        def addItem(self, text):
+            self.items.append(text)
+
+    class TestAuthorsEdit(unittest.TestCase):
+        def test_add_author_case_change_in_one_batch(self):
+            dialog = SimpleNamespace(al=FakeList(['Alice']), authors=['Alice'], author=SimpleNamespace(text=lambda: 'Bob & bob', setText=lambda text: None))
+            AuthorsEdit.add_author(dialog)
+            self.assertEqual(dialog.al.items, ['Alice', 'bob'])
+
+        def test_delegate_ignores_empty_edit(self):
+            index = SimpleNamespace(row=lambda: 3)
+            delegate = SimpleNamespace(edited=SimpleNamespace(emit=Mock()))
+            for text, expected in (('', None), (' & ', None), ('Bob & Alice', 'Bob')):
+                model = SimpleNamespace(setData=Mock())
+                delegate.edited.emit.reset_mock()
+                ItemDelegate.setModelData(delegate, SimpleNamespace(text=lambda: text), model, index)
+                if expected is None:
+                    self.assertFalse(model.setData.called, text)
+                    self.assertFalse(delegate.edited.emit.called, text)
+                else:
+                    model.setData.assert_called_once_with(index, expected)
+                    delegate.edited.emit.assert_called_once_with(3)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestAuthorsEdit)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 
 import json
 import re
+from bisect import bisect_left
 from functools import lru_cache
 from math import ceil
 
@@ -188,6 +189,7 @@ class Dehyphenator:
     def __init__(self, verbose=0, log=None):
         self.log = log
         self.verbose = verbose
+        self.found_cache = {}
         # Add common suffixes to the regex below to increase the likelihood of a match -
         # don't add suffixes which are also complete words, such as 'able' or 'sex'
         # only remove if it's not already the point of hyphenation
@@ -202,6 +204,16 @@ class Dehyphenator:
         self.prefix_string = '^(dis|re|un|in|ex)'
         self.prefixes = re.compile(rf'{self.prefix_string}$', re.IGNORECASE)
         self.removeprefix = re.compile(rf'{self.prefix_string}', re.IGNORECASE)
+
+    def find(self, word):
+        # The document does not change while it is processed and the same words are hyphenated again and
+        # again, so remember the answers: searching the whole document for a word that is not in it
+        # makes the time quadratic in the number of hyphens
+        try:
+            return self.found_cache[word]
+        except KeyError:
+            ans = self.found_cache[word] = self.html.find(word)
+            return ans
 
     def dehyphenate(self, match):
         firsthalf = match.group('firstpart')
@@ -228,14 +240,14 @@ class Dehyphenator:
 
         log('lookup word is: ' + lookupword + ', orig is: ' + hyphenated)
         try:
-            searchresult = self.html.find(lookupword.lower())
+            searchresult = self.find(lookupword.lower())
         except Exception:
             return hyphenated
         if self.format in {'html_cleanup', 'txt_cleanup'}:
-            if self.html.find(lookupword) != -1 or searchresult != -1:
+            if self.find(lookupword) != -1 or searchresult != -1:
                 log('    Cleanup:returned dehyphenated word: ' + dehyphenated)
                 return dehyphenated
-            elif self.html.find(hyphenated) != -1:
+            elif self.find(hyphenated) != -1:
                 log('        Cleanup:returned hyphenated word: ' + hyphenated)
                 return hyphenated
             else:
@@ -249,7 +261,7 @@ class Dehyphenator:
             if len(firsthalf) <= 2 and len(secondhalf) <= 2:
                 log('too short, returned hyphenated word: ' + hyphenated)
                 return hyphenated
-            if self.html.find(lookupword) != -1 or searchresult != -1:
+            if self.find(lookupword) != -1 or searchresult != -1:
                 log('     returned dehyphenated word: ' + dehyphenated)
                 return dehyphenated
             else:
@@ -259,36 +271,58 @@ class Dehyphenator:
     def __call__(self, html, format, length=1):
         self.html = html
         self.format = format
+        self.found_cache = {}
+        # [^\W\-] is \w. The patterns below find the same matches as the earlier versions without ever trying a
+        # way of matching that cannot succeed, which made them quadratic or cubic in the size of the text:
+        # * A word is tried only from its first letter (start_of_word), as hyphens are not word characters and
+        #   a start in the middle gives the same match minus its first letters. The exception is the lookbehind
+        #   that wants `length` characters before the word: a word closer than that to the start of the line
+        #   first satisfies it some letters in, and that is where its match starts.
+        # * Runs followed by something that cannot match their characters are possessive.
+        start_of_word = r'(?<=.{%i})(?:(?<!\w)|(?<!.{%i}))' % (length, length + 1)  # noqa: UP031
+        inside_tag = None
         if format == 'html':
             intextmatch = re.compile(
-                (
-                    r'(?<=.{%i})(?P<firstpart>[^\W\-]+)(-|‐)\s*(?=<)(?P<wraptags>(</span>)?'  # noqa: UP031
-                    r'\s*(</[iubp]>\s*){1,2}(?P<up2threeblanks><(p|div)[^>]*>\s*(<p[^>]*>\s*</p>\s*)'
-                    r'?</(p|div)>\s+){0,3}\s*(<[iubp][^>]*>\s*){1,2}(<span[^>]*>)?)\s*(?P<secondpart>[\w\d]+)'
-                )
-                % length
+                start_of_word + r'(?P<firstpart>\w++)(-|‐)\s*+(?=<)(?P<wraptags>(</span>)?'
+                r'\s*+(</[iubp]>\s*+){1,2}(?P<up2threeblanks><(p|div)[^>]*+>\s*+(<p[^>]*+>\s*+</p>\s*+)'
+                r'?</(p|div)>\s++){0,3}\s*+(<[iubp][^>]*+>\s*+){1,2}(<span[^>]*+>)?)\s*+(?P<secondpart>[\w\d]+)'
             )
         elif format == 'pdf':
             intextmatch = re.compile(
-                (
-                    r'(?<=.{%i})(?P<firstpart>[^\W\-]+)(-|‐)\s*(?P<wraptags><p>|'  # noqa: UP031
-                    r'</[iub]>\s*<p>\s*<[iub]>)\s*(?P<secondpart>[\w\d]+)'
-                )
-                % length
+                start_of_word + r'(?P<firstpart>\w++)(-|‐)\s*+(?P<wraptags><p>|'
+                r'</[iub]>\s*+<p>\s*+<[iub]>)\s*+(?P<secondpart>[\w\d]+)'
             )
         elif format == 'txt':
-            intextmatch = re.compile(r'(?<=.{%i})(?P<firstpart>[^\W\-]+)(-|‐)( |\t)*(?P<wraptags>(\n( |\t)*)+)(?P<secondpart>[\w\d]+)' % length)  # noqa: UP031
+            intextmatch = re.compile(start_of_word + r'(?P<firstpart>\w++)(-|‐)( |\t)*+(?P<wraptags>(\n( |\t)*+)++)(?P<secondpart>[\w\d]+)')
         elif format == 'individual_words':
-            intextmatch = re.compile(r'(?!<)(?P<firstpart>[^\W\-]+)(-|‐)\s*(?P<secondpart>\w+)(?![^<]*?>)', re.UNICODE)
+            # The test (?![^<]*?>) that the word is not inside a tag scanned to the next < or > for every
+            # hyphen. It is now done with a binary search in the positions of < and > collected once. A match is
+            # in one run without them, so shortening it does not change the answer.
+            intextmatch = re.compile(r'(?<!\w)(?!<)(?P<firstpart>\w++)(-|‐)\s*+(?P<secondpart>\w+)', re.UNICODE)
+            angle_brackets = [m.start() for m in re.finditer(r'[<>]', html)]
+
+            def inside_tag(pos, text=html):
+                i = bisect_left(angle_brackets, pos)
+                return i < len(angle_brackets) and text[angle_brackets[i]] == '>'
+
         elif format == 'html_cleanup':
             intextmatch = re.compile(
-                r'(?P<firstpart>[^\W\-]+)(-|‐)\s*(?=<)(?P<wraptags></span>\s*(</[iubp]>'
-                r'\s*<[iubp][^>]*>\s*)?<span[^>]*>|</[iubp]>\s*<[iubp][^>]*>)?\s*(?P<secondpart>[\w\d]+)'
+                r'(?<!\w)(?P<firstpart>\w++)(-|‐)\s*+(?=<)(?P<wraptags></span>\s*+(</[iubp]>'
+                r'\s*+<[iubp][^>]*+>\s*+)?<span[^>]*+>|</[iubp]>\s*+<[iubp][^>]*+>)?\s*+(?P<secondpart>[\w\d]+)'
             )
         elif format == 'txt_cleanup':
-            intextmatch = re.compile(r'(?P<firstpart>[^\W\-]+)(-|‐)(?P<wraptags>\s+)(?P<secondpart>[\w\d]+)')
+            intextmatch = re.compile(r'(?<!\w)(?P<firstpart>\w++)(-|‐)(?P<wraptags>\s++)(?P<secondpart>[\w\d]+)')
 
-        html = intextmatch.sub(self.dehyphenate, html)
+        if inside_tag is None:
+            html = intextmatch.sub(self.dehyphenate, html)
+        else:
+
+            def dehyphenate_if_not_in_tag(match):
+                if inside_tag(match.end()):
+                    return match.group()
+                return self.dehyphenate(match)
+
+            html = intextmatch.sub(dehyphenate_if_not_in_tag, html)
         return html
 
 
@@ -646,3 +680,90 @@ class HTMLPreProcessor:
                     html = html.replace(char, asciichar)
 
         return html
+
+
+def find_tests():
+    import time
+    import unittest
+
+    from calibre.utils.logging import Log
+
+    class DehyphenatorTest(unittest.TestCase):
+        def dehyphenate(self, html, format, length=1):
+            log = Log()
+            log.filter_level = log.ERROR
+            return Dehyphenator(0, log)(html, format, length)
+
+        def test_dehyphenator(self):
+            for format, length, html, expected in (
+                (
+                    'html',
+                    1,
+                    (
+                        'The inter-</p>\n'
+                        '<p>national treaty. The international law. Some con-\n'
+                        '</p>\n'
+                        '<p><span>tinued</span> text and continued work, a well-</p><p>known thing.'
+                    ),
+                    ('The international treaty. The international law. Some continued</span> text and continued work, a well-known thing.'),
+                ),
+                (
+                    'html',
+                    5,
+                    (
+                        'The inter-</p>\n'
+                        '<p>national treaty. The international law. Some con-\n'
+                        '</p>\n'
+                        '<p><span>tinued</span> text and continued work, a well-</p><p>known thing.'
+                    ),
+                    ('The international treaty. The international law. Some continued</span> text and continued work, a well-known thing.'),
+                ),
+                (
+                    'pdf',
+                    1,
+                    ('The inter-\n<p>national treaty. International. A re-\n</p><p>peat of repeat. Un-\n</i><p><i>known</i> and unknown.'),
+                    ('The international treaty. International. A re-\n</p><p>peat of repeat. Unknown</i> and unknown.'),
+                ),
+                (
+                    'txt',
+                    1,
+                    ('The inter-\n  national treaty and international law.\nA re-\npeat of repeat, a self-\nevident truth. Un- \n\n known and unknown.'),
+                    ('The international treaty and international law.\nA repeat of repeat, a self-evident truth. Unknown and unknown.'),
+                ),
+                (
+                    'txt',
+                    10,
+                    ('ab inter-\nnational treaty; international. Long enough line here, con-\ntinued and continued.'),
+                    ('ab inter-\nnational treaty; international. Long enough line here, continued and continued.'),
+                ),
+                (
+                    'individual_words',
+                    1,
+                    ('inter-national treaty and international; re-peat of repeat; <a href="x-y">z-w</a> in-side; well-known; self- evident'),
+                    ('international treaty and international; re-peat of repeat; <a href="x-y">z-w</a> in-side; well-known; self-evident'),
+                ),
+                (
+                    'html_cleanup',
+                    1,
+                    ('inter-</p><p>national treaty; international; well-</p><p>known; known. Re-</span> <span>peat of repeat.'),
+                    'international treaty; international; well—</p><p>known; known. Repeat of repeat.',
+                ),
+                (
+                    'txt_cleanup',
+                    1,
+                    'inter- national treaty international; self- evident; a - b; re- peat of repeat',
+                    'international treaty international; self— evident; a - b; repeat of repeat',
+                ),
+            ):
+                self.assertEqual(self.dehyphenate(html, format, length), expected, html)
+            # Patterns that backtrack take seconds on these, linear ones milliseconds
+            pad = ' ' * 300
+            for html, format in (
+                (f'word-{pad}</p>{pad}</p>{pad}<p>{pad}<i>{pad}!', 'html'),
+                ('ab-cd ' * 8000, 'individual_words'),
+            ):
+                start = time.process_time()
+                self.dehyphenate(html, format)
+                self.assertLess(time.process_time() - start, 0.5, format)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(DehyphenatorTest)

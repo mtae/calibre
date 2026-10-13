@@ -22,6 +22,7 @@ HEAVY_MODULES = (
     'html5lib',
     'soupsieve',
     'mechanize',  # Only needed for web metadata look ups, by the amazon source
+    'calibre.ebooks.unihandecode',  # Large tables; only needed for non-ASCII CSS class names, filenames, etc.
 )
 
 CONTAINER = '''<?xml version="1.0"?>
@@ -149,5 +150,19 @@ def find_tests():
             with self.assertRaises(HTTPError):
                 run(500)
             self.assertEqual(calls, ['google'])
+
+        def test_ascii_text(self):
+            from calibre.utils.filenames import ascii_text
+
+            # Text that is already ASCII is returned unchanged
+            for x in ('', 'class1', 'Hello, World! 123\n\t', '\x00\x7f'):
+                self.assertEqual(ascii_text(x), x)
+                self.assertEqual(ascii_text(x.encode('ascii')), x)
+            # Anything else is transliterated to ASCII
+            for x in ('caf\xe9', 'na\xefve ř', 'x–y'):
+                r = ascii_text(x)
+                self.assertTrue(isinstance(r, str) and r.isascii() and r, repr(r))
+            self.assertEqual(ascii_text('caf\xe9'), 'cafe')
+            self.assertEqual(ascii_text('caf\xe9'.encode()), 'cafe')
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(StartupTest)

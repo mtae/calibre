@@ -439,6 +439,107 @@ class Structure(BaseTest):
         self.assertEqual(sheet.cssRules[1].cssRules[0].selectorText, f'p#{nid}, [id="{nid}"]')
         self.assertEqual(sheet.cssRules[2].selectorText, '#id_x')
 
+    def test_do_split_inplace(self):
+        # do_split_inplace() must give exactly the same trees as do_split()
+        import copy
+        import random
+
+        from lxml import etree
+
+        from calibre.ebooks.oeb.polish.split import do_split, do_split_inplace
+        from calibre.utils.logging import default_log
+
+        ns = 'http://www.w3.org/1999/xhtml'
+        texts = ['', None, ' ', '\n', 'txt ', ' words here', '\n\n  x ']
+        tags = ['div', 'p', 'span', 'h2', 'a', 'ul', 'li', 'table', 'td', 'i', 'pre', 'br']
+
+        def build(r):
+            def mk(parent, depth):
+                for _ in range(r.randint(0, 4 if depth < 5 else 1)):
+                    if r.random() < 0.1:
+                        c = etree.Comment('c')
+                        parent.append(c)
+                    else:
+                        c = etree.SubElement(parent, f'{{{ns}}}{r.choice(tags)}')
+                        c.text = r.choice(texts)
+                        mk(c, depth + 1)
+                    c.tail = r.choice(texts)
+
+            html = etree.Element(f'{{{ns}}}html', nsmap={None: ns})
+            etree.SubElement(etree.SubElement(html, f'{{{ns}}}head'), f'{{{ns}}}title').text = 'T'
+            body = etree.SubElement(html, f'{{{ns}}}body')
+            body.text = r.choice(texts)
+            mk(body, 0)
+            return etree.ElementTree(html)
+
+        def ser(t):
+            return etree.tostring(t, encoding='utf-8')
+
+        def pick(r, tree):
+            elems = list(tree.getroot().find(f'{{{ns}}}body').iterdescendants(f'{{{ns}}}*'))
+            return tree.getpath(r.choice(elems)) if elems else None
+
+        for seed in range(300):
+            r = random.Random(seed)
+            base = build(r)
+            for before in (True, False):
+                # The second split is done on the remaining tree, as when splitting on many page breaks
+                t, t_old = copy.deepcopy(base), copy.deepcopy(base)
+                for _ in range(2):
+                    path = pick(r, t)
+                    if path is None:
+                        break
+                    old = do_split(t_old.xpath(path)[0], default_log, before=before)
+                    new = do_split_inplace(t, t.xpath(path)[0], default_log, before=before)
+                    self.assertIsNotNone(new)
+                    self.assertIs(new[1], t)
+                    for o, n in zip(old, new):
+                        self.assertEqual(ser(o), ser(n), f'seed={seed} before={before} path={path}')
+                    t_old = old[1]
+
+    def test_split_on_page_breaks(self):
+        # Splitting on page breaks must keep giving these parts
+        import re
+
+        from lxml import etree
+
+        from calibre.ebooks.oeb.base import XPath
+        from calibre.ebooks.oeb.transforms.split import FlowSplitter
+        from calibre.utils.logging import default_log
+
+        ns = 'http://www.w3.org/1999/xhtml'
+        cases = (
+            ('intro<h1 id="t">T</h1><p>one</p><div class="a"><p id="b1">two</p>x<p>three</p></div><h2 id="b2">H</h2>tail<p>four</p>' +
+             '<div><div><p id="b3">five</p>six</div>seven</div>',
+             (('b1', True), ('b2', True), ('b3', False)),
+             ['<body>intro<h1 id="t">T</h1><p>one</p></body>',
+              '<body>\n<div class="a"><p id="b1">two</p>x<p>three</p></div></body>',
+              '<body>\n<h2 id="b2">H</h2>tail<p>four</p><div><div><p id="b3">five</p>\n</div>seven</div></body>',
+              '<body>\n<div>\n<div>\nsix</div>seven</div></body>']),
+            ('<h1 id="x">A</h1><p>one</p><h1 id="y">B</h1><p>two</p>', (('x', True), ('y', True)),
+             ['<body>\n<h1 id="x">A</h1><p>one</p></body>', '<body>\n<h1 id="y">B</h1><p>two</p></body>']),
+            ('<p id="d">1</p><p id="m">2</p><p id="d">3</p><p>4</p>', (('m', True), ('d', False)),
+             ['<body><p id="d">1</p>\n</body>', '<body>\n<p id="m">2</p><p id="d">3</p><p>4</p></body>']),
+            ('<div><p id="a">1</p><p>2</p></div><div id="c"><p>3</p><p id="e">4</p></div><p>5</p>',
+             (('a', False), ('c', True), ('e', True)),
+             ['<body><div><p id="a">1</p>\n</div></body>', '<body>\n<div>\n<p>2</p></div></body>',
+              '<body>\n<div id="c"><p>3</p></div></body>', '<body>\n<div id="c">\n<p id="e">4</p></div><p>5</p></body>']),
+            # Only the part before the break is left, the item's data must not have been changed by the split
+            ('<div class="g"><section id="s"><figure id="f"><img src="a.jpg"/></figure></section></div>', (('f', False),),
+             ['<body><div class="g"><section id="s"><figure id="f"><img src="a.jpg"/></figure>\n</section></div></body>']),
+        )
+        for body, breaks, expected in cases:
+            root = etree.fromstring(f'<html xmlns="{ns}"><head><title>t</title></head><body>{body}</body></html>')
+            splitter = FlowSplitter.__new__(FlowSplitter)
+            splitter.log = default_log
+            splitter.page_break_ids = [x for x, before in breaks]
+            splitter.page_breaks = [(XPath(f'//*[@id="{x}"]'), before) for x, before in breaks]
+            orig = etree.tostring(root)
+            splitter.split_on_page_breaks(root.getroottree())
+            self.assertEqual(etree.tostring(root), orig, 'The tree being split was modified')
+            parts = [re.sub(r'\s*xmlns="[^"]+"', '', etree.tostring(t.getroot().find(f'{{{ns}}}body'), encoding='unicode')) for t in splitter.trees]
+            self.assertEqual(parts, expected, body)
+
 
 def find_tests():
     import unittest

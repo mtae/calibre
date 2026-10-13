@@ -2772,16 +2772,50 @@ class Cache:
         """
         duplicates, ids = [], []
         for mi, format_map in books:
-            book_id = self.create_book_entry(mi, add_duplicates=add_duplicates, apply_import_tags=apply_import_tags, preserve_uuid=preserve_uuid)
-            if book_id is None:
+            if not add_duplicates and self.has_book(mi):
                 duplicates.append((mi, format_map))
-            else:
-                fmt_map = {}
-                ids.append(book_id)
+                continue
+            to_add, streams = [], []
+            try:
                 for fmt, stream_or_path in format_map.items():
-                    if self.add_format(book_id, fmt, stream_or_path, dbapi=dbapi, run_hooks=run_hooks):
-                        fmt_map[fmt.lower()] = getattr(stream_or_path, 'name', stream_or_path) or '<stream>'
-                run_plugins_on_postadd(dbapi or self, book_id, fmt_map)
+                    if run_hooks:
+                        # Run import plugins, the write lock is not held to cater for
+                        # broken plugins that might spin the event loop by popping up a
+                        # message in the GUI during the processing.
+                        npath = run_import_plugins(stream_or_path, fmt)
+                        stream = open(make_long_path_useable(npath), 'rb')
+                        streams.append(stream)
+                        hfmt = check_ebook_format(stream, os.path.splitext(npath)[-1].lower().replace('.', '').upper())
+                        to_add.append((fmt, (hfmt or '').upper(), stream, stream_or_path))
+                    else:
+                        to_add.append((fmt, fmt, stream_or_path, stream_or_path))
+                # The row, metadata and formats of a book are one transaction, so
+                # one commit and not one for each of them
+                fmt_map = {}
+                with self.quiet_write_lock:
+                    try:
+                        with self.backend.conn:
+                            # Duplicates were rejected above, before the import plugins ran
+                            book_id = self.create_book_entry(
+                                mi, add_duplicates=True, apply_import_tags=apply_import_tags, preserve_uuid=preserve_uuid
+                            )
+                            for fmt, hfmt, stream, stream_or_path in to_add:
+                                if self.add_format(book_id, hfmt, stream, dbapi=dbapi, run_hooks=False):
+                                    fmt_map[fmt.lower()] = getattr(stream_or_path, 'name', stream_or_path) or '<stream>'
+                    except Exception:
+                        # sqlite rolled back the whole transaction, so the book is not added, re-read
+                        # everything from the db to ensure the db and Cache are in sync
+                        self._reload_from_db()
+                        raise
+                if run_hooks:
+                    # The write lock is released so the plugins can call api without a locking violation.
+                    for fmt, hfmt, stream, stream_or_path in to_add:
+                        run_plugins_on_postimport(dbapi or self, book_id, hfmt)
+            finally:
+                for stream in streams:
+                    stream.close()
+            ids.append(book_id)
+            run_plugins_on_postadd(dbapi or self, book_id, fmt_map)
         return ids, duplicates
 
     _add_books = add_books

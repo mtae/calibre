@@ -257,7 +257,22 @@ class HeuristicProcessor:
         n_lookahead_open = r'(?!\s*'
         n_lookahead_close = r')\s*'
 
-        default_title = r"(<[ibu][^>]*>)?\s{0,3}(?!Chapter)([\w\:\'’\"-]+\s{0,3}){1,5}?(</[ibu][^>]*>)?(?=<)"
+        # Whitespace and word repeats are possessive: each is followed by a < or by
+        # something that cannot match what it matched, so giving characters back
+        # never finds a different match, it only made the engine try every way of
+        # dividing a run of whitespace between neighbouring repeats.
+        def possessive_ws(pattern):
+            return pattern.replace(r'\s*', r'\s*+')
+
+        chapter_line_open = possessive_ws(chapter_line_open)
+        chapter_line_close = possessive_ws(chapter_line_close)
+        title_line_open = possessive_ws(title_line_open)
+        title_line_close = possessive_ws(title_line_close)
+        chapter_header_close = possessive_ws(chapter_header_close)
+        blank_lines = possessive_ws(blank_lines)
+        n_lookahead_close = possessive_ws(n_lookahead_close)
+
+        default_title = r"(<[ibu][^>]*>)?\s{0,3}(?!Chapter)([\w\:\'’\"-]++\s{0,3}+){1,5}?(</[ibu][^>]*>)?(?=<)"
         simple_title = r'(<[ibu][^>]*>)?\s{0,3}(?!(Chapter|\s+<)).{0,65}?(</[ibu][^>]*>)?(?=<)'
 
         analysis_result = []
@@ -266,7 +281,7 @@ class HeuristicProcessor:
             [
                 (
                     r"[^'\"]?(Introduction|Synopsis|Acknowledgements|Epilogue|CHAPTER|Kapitel|Volume\b|Prologue|Book\b|Part\b|Dedication|Preface)"
-                    r"\s*([\d\w-]+\:?\'?\s*){0,5}"
+                    r"\s*+([\d\w-]++\:?+\'?+\s*+){0,5}"
                 ),
                 True,
                 True,
@@ -277,7 +292,7 @@ class HeuristicProcessor:
             ],
             # Highest frequency headings which include titles
             [
-                r"[^'\"]?(CHAPTER|Kapitel)\s*([\dA-Z\-\'\"\?!#,]+\s*){0,7}\s*",
+                r"[^'\"]?(CHAPTER|Kapitel)\s*+([\dA-Z\-\'\"\?!#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -286,7 +301,10 @@ class HeuristicProcessor:
                 'chapter',
             ],
             [
-                r'<b[^>]*>\s*(<span[^>]*>)?\s*(?!([*#•=]+\s*)+)(\s*(?=[\d.\w#\-*\s]+<)([\d.\w#-*]+\s*){1,5}\s*)(?!\.)(</span>)?\s*</b>',
+                # (?!([*#•=]+\s*)+) only failed when no whitespace came before it, as the \s*
+                # before it could give back a character: (?!(?<!\s)([*#•=])) says that without
+                # the nested repeats.
+                r'<b[^>]*>\s*+(<span[^>]*>)?\s*+(?!(?<!\s)([*#•=]))(\s*+(?=[\d.\w#\-*\s]++<)([\d.\w#-*]++\s*+){1,5}\s*+)(?!\.)(</span>)?\s*+</b>',
                 True,
                 True,
                 True,
@@ -295,7 +313,7 @@ class HeuristicProcessor:
                 'emphasized',
             ],  # Emphasized lines
             [
-                r"[^'\"]?(\d+(\.|:))\s*([\w\-\'\"#,]+\s*){0,7}\s*",
+                r"[^'\"]?(\d++(\.|:))\s*+([\w\-\'\"#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -304,7 +322,7 @@ class HeuristicProcessor:
                 'numeric',
             ],  # Numeric Chapters
             [
-                r'([A-Z]\s+){3,}\s*([\d\w-]+\s*){0,3}\s*',
+                r'([A-Z]\s++){3,}\s*+([\d\w-]++\s*+){0,3}\s*+',
                 True,
                 True,
                 True,
@@ -313,7 +331,7 @@ class HeuristicProcessor:
                 'letter_spaced',
             ],  # Spaced Lettering
             [
-                r"[^'\"]?(\d+\.?\s+([\d\w-]+\:?\'?-?\s?){0,5})\s*",
+                r"[^'\"]?(\d++\.?+\s++([\d\w-]++\:?+\'?+-?+\s?+){0,5})\s*+",
                 True,
                 True,
                 True,
@@ -322,7 +340,7 @@ class HeuristicProcessor:
                 'numeric_title',
             ],  # Numeric Titles
             [
-                r"[^'\"]?(\d+)\s*([\dA-Z\-\'\"\?!#,]+\s*){0,7}\s*",
+                r"[^'\"]?(\d++)\s*+([\dA-Z\-\'\"\?!#,]++\s*+){0,7}\s*+",
                 True,
                 True,
                 True,
@@ -331,7 +349,7 @@ class HeuristicProcessor:
                 'plain_number',
             ],  # Numeric Chapters, no dot or colon
             [
-                r"\s*[^'\"]?([A-Z#]+(\s|-){0,3}){1,5}\s*",
+                r"\s*[^'\"]?([A-Z#]++(\s|-){0,3}+){1,5}\s*+",
                 False,
                 True,
                 False,
@@ -1028,11 +1046,13 @@ class HeuristicProcessor:
         # If still no sections after unwrapping mark split points on lines with no punctuation
         if self.html_preprocess_sections < self.min_chapters and getattr(self.extra_opts, 'markup_chapter_headings', False):
             self.log.debug('Looking for more split points based on punctuation, currently have ' + str(self.html_preprocess_sections))
+            # (?!(\W)) is (?!([\W]+\s*)+) without the nested repeats. The group stays so that the
+            # group numbers do not change. The whitespace and word repeats are possessive, as above.
             chapdetect3 = re.compile(
-                r'<(?P<styles>(p|div)[^>]*)>\s*(?P<section>(<span[^>]*>)?\s*(?!([\W]+\s*)+)'
-                r'(<[ibu][^>]*>){0,2}\s*(<span[^>]*>)?\s*(<[ibu][^>]*>){0,2}\s*(<span[^>]*>)?\s*'
-                r'.?(?=[a-z#\-*\s]+<)([a-z#-*]+\s*){1,5}\s*\s*(</span>)?(</[ibu]>){0,2}\s*'
-                r'(</span>)?\s*(</[ibu]>){0,2}\s*(</span>)?\s*</(p|div)>)',
+                r'<(?P<styles>(p|div)[^>]*)>\s*+(?P<section>(<span[^>]*>)?\s*+(?!(\W))'
+                r'(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+'
+                r'.?(?=[a-z#\-*\s]++<)([a-z#-*]++\s*+){1,5}\s*+(</span>)?(</[ibu]>){0,2}\s*+'
+                r'(</span>)?\s*+(</[ibu]>){0,2}\s*+(</span>)?\s*+</(p|div)>)',
                 re.IGNORECASE,
             )
             html = chapdetect3.sub(self.chapter_break, html)
@@ -1083,6 +1103,7 @@ class HeuristicProcessor:
 def find_tests():
     import time
     import unittest
+    from types import SimpleNamespace
 
     SOFTBREAK = '<p class="softbreak" style="margin-top:.5em; page-break-before:avoid; text-align:center"> </p>'
     SOFTBREAK_1EM = SOFTBREAK.replace('.5em', '1em')
@@ -1225,5 +1246,143 @@ def find_tests():
             spaces = ' ' * 20000 + 'x'
             for pattern in (hp.blankreg, hp.anyblank):
                 self.assert_fast(pattern.findall, spaces)
+
+        def test_chapter_patterns(self):
+            for blanks, html, expected in (
+                (
+                    False,
+                    ('<p>CHAPTER ONE</p>\n<p>Text here.</p>\n<p>CHAPTER TWO: The Title</p>\n<p>More text.</p>\n<p>Kapitel 3 - Der Anfang</p>\n<p>Last.</p>'),
+                    (
+                        '<h2>CHAPTER ONE</h2>\n'
+                        '<p>Text here.</p>\n'
+                        '<h2>CHAPTER TWO: The Title</h2>\n'
+                        '<p>More text.</p>\n'
+                        '<h2>Kapitel 3 - Der Anfang</h2>\n'
+                        '<p>Last.</p>'
+                    ),
+                ),
+                (
+                    False,
+                    (
+                        '<p>Chapter 1</p>\n'
+                        '<p>The Beginning</p>\n'
+                        '<p>Text.</p>\n'
+                        '<p>Chapter 2</p>\n'
+                        '<p>The Second Part</p>\n'
+                        '<p>Text.</p>\n'
+                        '<p>Chapter 3</p>\n'
+                        '<p>Third</p>'
+                    ),
+                    (
+                        '<h2 title="Chapter 1, The Beginning">Chapter 1</h2>\n'
+                        '<h3 class="sigilNotInTOC">The Beginning</h3>\n'
+                        '\n'
+                        '<p>Text.</p>\n'
+                        '<h2 title="Chapter 2, The Second Part">Chapter 2</h2>\n'
+                        '<h3 class="sigilNotInTOC">The Second Part</h3>\n'
+                        '\n'
+                        '<p>Text.</p>\n'
+                        '<h2 title="Chapter 3, Third">Chapter 3</h2>\n'
+                        '<h3 class="sigilNotInTOC">Third</h3>\n'
+                    ),
+                ),
+                (
+                    False,
+                    (
+                        '<p><b>The First Day</b></p>\n'
+                        '<p>Text.</p>\n'
+                        '<p><b>* * *</b></p>\n'
+                        '<p><b> The Second  Day </b></p>\n'
+                        '<p>Text.</p>\n'
+                        '<p><b><span>Third Day</span></b></p>'
+                    ),
+                    (
+                        '<h2><b>The First Day</b></h2>\n'
+                        '<p>Text.</p>\n'
+                        '<p><b>* * *</b></p>\n'
+                        '<h2><b> The Second  Day </b></h2>\n'
+                        '<p>Text.</p>\n'
+                        '<h2><b><span>Third Day</span></b></h2>\n'
+                    ),
+                ),
+                (
+                    False,
+                    ('<p>1. The Start</p>\n<p>text.</p>\n<p>2: Next one</p>\n<p>text.</p>\n<p>3. More</p>\n<p>4 Four Little Words</p>'),
+                    (
+                        '<h2>1. The Start</h2>\n'
+                        '<p>text.</p>\n'
+                        '<h2>2: Next one</h2>\n'
+                        '<p>text.</p>\n'
+                        '<h2 title="3\\. More, 4 Four Little Words">3. More</h2>\n'
+                        '<h3 class="sigilNotInTOC">4 Four Little Words</h3>\n'
+                    ),
+                ),
+                (
+                    False,
+                    ('<p>P A R T  I</p>\n<p>text</p>\n<p>P A R T  II  Two</p>\n<p>text</p>\n<p>P A R T III</p>'),
+                    (
+                        '<h2 title="P A R T I, text">P A R T  I</h2>\n'
+                        '<h3 class="sigilNotInTOC">text</h3>\n'
+                        '\n'
+                        '<h2 title="P A R T II Two, text">P A R T  II  Two</h2>\n'
+                        '<h3 class="sigilNotInTOC">text</h3>\n'
+                        '\n'
+                        '<p>P A R T III</p>'
+                    ),
+                ),
+                (
+                    False,
+                    ('<div><span>Prologue</span></div>\n<div>text.</div>\n<p><i>Epilogue</i></p>\n<p>Dedication To Us</p>\n<p>Part 2: The Rest</p>'),
+                    ('<h2>Prologue</h2>\n<div>text.</div>\n<p><i>Epilogue</i></p>\n<p>Dedication To Us</p>\n<h2>Part 2: The Rest</h2>\n'),
+                ),
+                (
+                    True,
+                    (
+                        '<p>CHAPTER ONE</p>\n'
+                        '<p></p>\n'
+                        '<p>Intro.</p>\n'
+                        '<p></p>\n'
+                        '<p>CHAPTER TWO</p>\n'
+                        '<p></p>\n'
+                        '<p></p>\n'
+                        '<p>Intro.</p>\n'
+                        '<p>Chapter 3</p>\n'
+                        '<p></p>\n'
+                        '<p>Title</p>'
+                    ),
+                    (
+                        '<h2>CHAPTER ONE</h2>\n'
+                        '<p>Intro.</p>\n'
+                        '<p></p>\n'
+                        '<h2>CHAPTER TWO</h2>\n'
+                        '<p>Intro.</p>\n'
+                        '<h2 title="Chapter 3, Title">Chapter 3</h2>\n'
+                        '<h3 class="sigilNotInTOC">Title</h3>\n'
+                    ),
+                ),
+                (
+                    False,
+                    ('<p>ONE</p>\n<p>text.</p>\n<p>TWO THREE</p>\n<p>text.</p>\n<p>FOUR</p>\n<p>IV</p>\n<p>text</p>'),
+                    ('<h2>ONE</h2>\n\n<p>text.</p>\n<h2>TWO THREE</h2>\n\n<p>text.</p>\n<h2>FOUR</h2>\n\n<h2>IV</h2>\n\n<p>text</p>'),
+                ),
+            ):
+                hp = self.processor(min_chapters=3)
+                self.assertEqual(hp.markup_chapters(html, 0, blanks), expected, html)
+            filler = '<p>' + 'Some filler text goes here. ' * 10 + '</p>\n'
+            for section, expected in (
+                ('<p>Some heading words</p>', ['<p style="page-break-before:always">Some heading words</p>']),
+                ('<p><span><i>Some heading words</i></span></p>', []),
+                ('<div>Some heading words</div>', ['<div style="page-break-before:always">Some heading words</div>']),
+                ('<p>  !! punctuated first</p>', []),
+                ('<p><b> bold first</b></p>', []),
+                ('<p>Some heading, with punctuation.</p>', []),
+            ):
+                hp = self.processor(extra_opts=SimpleNamespace(markup_chapter_headings=True))
+                lines = [x for x in hp(filler + section + '\n' + filler).split('\n') if 'page-break-before:always' in x]
+                self.assertEqual(lines, expected, section)
+            pad = ' ' * 60
+            self.assert_fast(self.processor().markup_chapters, f'<p>CHAPTER{pad}1 x{pad}<b></p>\n<p>text</p>', 0, False)
+            pad = ' ' * 16
+            self.assert_fast(self.processor(extra_opts=SimpleNamespace(markup_chapter_headings=True)), filler + f'<p>{pad}some heading{pad}<b>x</p>\n' + filler)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)

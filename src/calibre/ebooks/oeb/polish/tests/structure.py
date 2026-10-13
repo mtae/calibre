@@ -488,7 +488,6 @@ class Structure(BaseTest):
         self.assertEqual(sheet.cssRules[1].cssRules[0].selectorText, f'p#{nid}, [id="{nid}"]')
         self.assertEqual(sheet.cssRules[2].selectorText, '#id_x')
 
-<<<<<<< HEAD
     def test_do_split_inplace(self):
         # do_split_inplace() must give exactly the same trees as do_split()
         import copy
@@ -540,7 +539,7 @@ class Structure(BaseTest):
                 self.assertIs(new[1], t)
                 for o, n in zip(old, new):
                     self.assertEqual(ser(o), ser(n), f'seed={seed} before={before} path={path}')
-=======
+
     def test_empty_nav_is_warning(self):
         from calibre.ebooks.oeb.polish.check.base import WARN
         from calibre.ebooks.oeb.polish.check.opf import EmptyNav, check_opf
@@ -578,7 +577,6 @@ class Structure(BaseTest):
         body = f'<body><p>{links}<a href="#t">d</a></p><h1 id="t">T</h1></body>'
         c = self.create_epub([cmi('index.html', f'<html xmlns="http://www.w3.org/1999/xhtml">{body}</html>', None)])
         self.assertEqual([x.title for x in from_links(c)], ['d'])
->>>>>>> refs/rewritten/pr-20-editor-fixes-2
 
 
 def find_tests():

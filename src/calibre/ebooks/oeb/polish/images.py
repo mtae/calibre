@@ -54,7 +54,7 @@ class Worker(Thread):
             if self.webp_quality is None:
                 func = optimize_webp
             else:
-                func = partial(encode_webp, quality=self.jpeg_quality)
+                func = partial(encode_webp, quality=self.webp_quality)
         elif self.jpeg_quality is None:
             func = optimize_jpeg
         else:

@@ -518,7 +518,7 @@ def from_links(container):
             seen_titles.add(text)
             toc.add(text, dest, frag=frag)
     verify_toc_destinations(container, toc)
-    for child in toc:
+    for child in tuple(toc):
         if not child.dest_exists:
             toc.remove(child)
     return toc

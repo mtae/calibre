@@ -852,6 +852,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.dialogs.llm_book import find_tests
 
         a(find_tests())
+        from calibre.gui2.comments_editor import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html_entities import find_tests
 
         a(find_tests())
@@ -991,6 +994,12 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.gui2.save import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.editor.canvas import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.text_search import find_tests
 
         a(find_tests())
         if iswindows:

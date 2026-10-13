@@ -473,6 +473,7 @@ class Structure(BaseTest):
         self.assertEqual(sheet.cssRules[1].cssRules[0].selectorText, f'p#{nid}, [id="{nid}"]')
         self.assertEqual(sheet.cssRules[2].selectorText, '#id_x')
 
+<<<<<<< HEAD
     def test_do_split_inplace(self):
         # do_split_inplace() must give exactly the same trees as do_split()
         import copy
@@ -524,6 +525,45 @@ class Structure(BaseTest):
                 self.assertIs(new[1], t)
                 for o, n in zip(old, new):
                     self.assertEqual(ser(o), ser(n), f'seed={seed} before={before} path={path}')
+=======
+    def test_empty_nav_is_warning(self):
+        from calibre.ebooks.oeb.polish.check.base import WARN
+        from calibre.ebooks.oeb.polish.check.opf import EmptyNav, check_opf
+
+        nav = (
+            '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+            '<body><nav epub:type="toc"><ol/></nav></body></html>'
+        )
+        c = self.create_epub([cmi('nav.html', nav, 'nav')])
+        errors = [e for e in check_opf(c) if isinstance(e, EmptyNav)]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].level, WARN)
+
+    def test_compress_webp_uses_webp_quality(self):
+        from queue import Queue
+        from threading import Event
+        from unittest.mock import patch
+
+        from calibre.ebooks.oeb.polish.images import Worker
+
+        path = os.path.join(self.tdir, 'a.webp')
+        with open(path, 'wb') as f:
+            f.write(b'x')
+        abort = Event()
+        abort.set()  # the worker thread exits at once, we call compress() directly
+        worker = Worker(abort, 'test', Queue(), {}, 90, 40, lambda name: None)
+        with patch('calibre.utils.img.encode_webp') as encode_webp:
+            worker.compress('a.webp', path, 'image/webp')
+        self.assertEqual(encode_webp.call_args.kwargs['quality'], 40)
+
+    def test_toc_from_links_removes_consecutive_dead_links(self):
+        from calibre.ebooks.oeb.polish.toc import from_links
+
+        links = ''.join(f'<a href="missing{x}.html">{x}</a>' for x in 'abc')
+        body = f'<body><p>{links}<a href="#t">d</a></p><h1 id="t">T</h1></body>'
+        c = self.create_epub([cmi('index.html', f'<html xmlns="http://www.w3.org/1999/xhtml">{body}</html>', None)])
+        self.assertEqual([x.title for x in from_links(c)], ['d'])
+>>>>>>> refs/rewritten/pr-20-editor-fixes-2
 
 
 def find_tests():

@@ -21,6 +21,7 @@ HEAVY_MODULES = (
     'bs4',  # Only needed by library.comments for rarely used HTML comment conversion, via jacket
     'html5lib',
     'soupsieve',
+    'mechanize',  # Only needed for web metadata look ups, by the amazon source
 )
 
 CONTAINER = '''<?xml version="1.0"?>
@@ -109,5 +110,44 @@ def find_tests():
                 loaded = self.loaded_modules(fmt)
                 for mod in HEAVY_MODULES:
                     self.assertTrue(mod not in loaded, f'{mod} was imported during a conversion to {fmt}')
+
+        def test_amazon_search_engine_errors(self):
+            from threading import Event
+            from unittest.mock import patch
+
+            from mechanize import HTTPError
+
+            from calibre.ebooks.metadata.sources.amazon import Amazon
+            from calibre.ebooks.metadata.sources.update import search_engines_module
+
+            se = search_engines_module()
+            calls = []
+
+            class Browser:
+                def set_current_header(self, *a):
+                    pass
+
+            def search(name, code):
+                def f(terms, site, log=None, br=None, timeout=None):
+                    calls.append(name)
+                    if code:
+                        raise HTTPError('https://example.invalid', code, 'error', {}, None)
+                    return [], 'https://example.invalid'
+
+                return f
+
+            def run(google_error):
+                del calls[:]
+                with patch.multiple(se, google_search=search('google', google_error), ddg_search=search('ddg', 0)):
+                    return Amazon(None).search_search_engine(
+                        Browser(), False, lambda *a, **k: None, Event(), 'Title', ['Author'], {}, 10, 'google')
+
+            # Too many requests from Google falls back to DuckDuckGo
+            self.assertEqual(run(429)[0], [])
+            self.assertEqual(calls, ['google', 'ddg'])
+            # Other errors are not handled
+            with self.assertRaises(HTTPError):
+                run(500)
+            self.assertEqual(calls, ['google'])
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(StartupTest)

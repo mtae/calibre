@@ -51,6 +51,7 @@ def process_jpegs_for_amazon(data: bytes) -> bytes:
 
 def find_tests():
     import struct
+    import time
     import unittest
 
     class TestProcessJpegsForAmazon(unittest.TestCase):
@@ -107,7 +108,114 @@ def find_tests():
             result = process_jpegs_for_amazon(data)
             self.assertFalse(self._has_exif_segment(result))
 
-    return unittest.defaultTestLoader.loadTestsFromTestCase(TestProcessJpegsForAmazon)
+    class TestImageProcessing(unittest.TestCase):
+        # Resources.add_resources() must give the same records, indices and
+        # warnings however many threads are used to process the images
+
+        class Item:
+
+            def __init__(self, stats, n, href, media_type='image/png', data_error=False):
+                self.stats, self.n, self.href, self.media_type = stats, n, href, media_type
+                self.data_error, self.loaded = data_error, False
+
+            @property
+            def data(self):
+                if self.data_error:
+                    raise ValueError('cannot read')
+                with self.stats.lock:
+                    if not self.loaded:
+                        self.loaded = True
+                        self.stats.loaded += 1
+                        self.stats.max_loaded = max(self.stats.max_loaded, self.stats.loaded)
+                return b'img%d' % self.n
+
+            def unload_data_from_memory(self):
+                with self.stats.lock:
+                    if self.loaded:
+                        self.loaded = False
+                        self.stats.loaded -= 1
+
+        class Log:
+
+            def __init__(self):
+                self.warnings = []
+
+            def info(self, *a):
+                pass
+
+            def warn(self, msg):
+                self.warnings.append(msg)
+
+        def run_resources(self, num_images, ncpus, bad=(), unreadable=(), delay=0.004):
+            import threading
+            from types import SimpleNamespace
+            from unittest.mock import patch
+
+            stats = SimpleNamespace(lock=threading.Lock(), loaded=0, max_loaded=0, running=0, max_running=0, threads=set())
+            items = [self.Item(stats, n, f'img{n}.png', data_error=n in unreadable) for n in range(num_images)]
+            items.insert(1, SimpleNamespace(media_type='text/html', href='a.html'))
+            log = self.Log()
+            oeb = SimpleNamespace(
+                log=log, logger=log, guide={}, metadata=SimpleNamespace(cover=[]),
+                manifest=SimpleNamespace(values=lambda: items, ids={}))
+
+            def process_image(self_, data):
+                with stats.lock:
+                    stats.threads.add(threading.get_ident())
+                    stats.running += 1
+                    stats.max_running = max(stats.max_running, stats.running)
+                try:
+                    # earlier images take longer so that results complete out of order
+                    time.sleep(delay * max(0, num_images - int(data[3:])))
+                    if int(data[3:]) in bad:
+                        raise ValueError('bad image')
+                    return b'GIF89a' + data
+                finally:
+                    with stats.lock:
+                        stats.running -= 1
+
+            with patch.object(Resources, 'process_image', process_image), patch(
+                    'calibre.ebooks.mobi.writer2.resources.detect_ncpus', return_value=ncpus, create=True):
+                r = Resources(oeb, SimpleNamespace(mobi_keep_original_images=False), False)
+            return r, log, stats
+
+        def check_output(self, r, log, num_images, bad=(), unreadable=()):
+            good = [n for n in range(num_images) if n not in bad and n not in unreadable]
+            self.assertEqual(r.records, [b'GIF89a' + b'img%d' % n for n in good])
+            self.assertEqual(r.item_map, {f'img{n}.png': i + 1 for i, n in enumerate(good)})
+            self.assertEqual(set(r.mime_map.values()), {'image/gif'} if good else set())
+            self.assertEqual(r.image_indices, set(range(len(good))))
+            self.assertEqual(log.warnings, [f'Bad image file {f"img{n}.png"!r}' for n in range(num_images) if n in bad or n in unreadable])
+
+        def test_same_result_for_any_number_of_cpus(self):
+            import threading
+            for ncpus in (1, 2, 3, 4, 16):
+                r, log, stats = self.run_resources(10, ncpus, bad={3, 9}, unreadable={6})
+                self.check_output(r, log, 10, bad={3, 9}, unreadable={6})
+                threads = min(ncpus, 4)
+                self.assertLessEqual(stats.max_running, threads)
+                self.assertLessEqual(stats.max_loaded, 2 * threads if threads > 1 else 1)
+                self.assertEqual(stats.loaded, 0)  # all unloaded
+                if threads == 1:
+                    self.assertEqual(stats.threads, {threading.get_ident()})
+
+        def test_single_image_is_processed_on_the_calling_thread(self):
+            import threading
+            r, log, stats = self.run_resources(1, 8)
+            self.check_output(r, log, 1)
+            self.assertEqual(stats.threads, {threading.get_ident()})
+            r, log, stats = self.run_resources(1, 8, bad={0})
+            self.check_output(r, log, 1, bad={0})
+
+        def test_images_are_processed_concurrently(self):
+            r, log, stats = self.run_resources(8, 4)
+            self.check_output(r, log, 8)
+            self.assertGreater(stats.max_running, 1)
+
+    def load(x):
+        return unittest.defaultTestLoader.loadTestsFromTestCase(x)
+
+    return unittest.TestSuite((load(TestProcessJpegsForAmazon), load(TestImageProcessing)))
 
 
 class _Failed:

@@ -75,8 +75,8 @@ def comments_to_html(comments):
     # Convert two hyphens to emdash
     comments = comments.replace('--', '&mdash;')
 
-    # Imported here as it pulls in bs4, html5lib, soupsieve and chardet, which
-    # is slow and not needed for the common cases handled above
+    # Imported here as it pulls in bs4, html5lib and soupsieve, which is slow
+    # and not needed for the common cases handled above
     from calibre.ebooks.BeautifulSoup import BeautifulSoup, CData, Comment, Declaration, NavigableString, ProcessingInstruction
 
     soup = BeautifulSoup('<div>' + comments + '</div>').find('div')

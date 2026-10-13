@@ -17,8 +17,9 @@ from calibre.utils.localization import _, get_udc
 
 
 def ascii_text(orig):
-    if isinstance(orig, str) and orig.isascii():
-        # Nothing to transliterate. Avoids loading the large transliteration tables
+    if isinstance(orig, str) and orig.isascii() and orig.isprintable():
+        # Nothing to transliterate. Avoids loading the large transliteration
+        # tables. Control characters are left to the decoders.
         return orig
     udc = get_udc()
     try:

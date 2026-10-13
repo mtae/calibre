@@ -1659,7 +1659,7 @@ class Amazon(Source):
         else:  # auto or unknown
             urlproc, sfunc = se.google_url_processor, se.google_search
             # urlproc, sfunc = se.bing_url_processor, se.bing_search
-        from mechanize import HTTPError  # imported here as it takes 40ms and is only needed for web look ups
+        from mechanize import HTTPError  # imported here as it is slow to import and only needed for web look ups
         try:
             results, qurl = sfunc(terms, site, log=log, br=br, timeout=timeout)
         except HTTPError as err:

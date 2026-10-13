@@ -200,7 +200,7 @@ class JobsManager:
             mb = None
             now = monotonic()
             for job in self.jobs.values():
-                if not job.done and not job.abort_event.is_set():
+                if self.max_job_time and not job.done and not job.abort_event.is_set():
                     delta = self.max_job_time - (now - job.start_time)
                     if delta <= 0:
                         self.max_block = 0
@@ -215,7 +215,7 @@ class JobsManager:
         now = monotonic()
         found = False
         for job in self.jobs.values():
-            if not job.done and not job.abort_event.is_set():
+            if self.max_job_time and not job.done and not job.abort_event.is_set():
                 delta = self.max_job_time - (now - job.start_time)
                 if delta <= 0:
                     job.abort_event.set()

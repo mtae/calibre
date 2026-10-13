@@ -376,7 +376,7 @@ class RunStyle:
             if self.highlight is not inherit and self.highlight != 'transparent':
                 c['background-color'] = self.highlight
 
-            if self.b:
+            if self.b is True:
                 c['font-weight'] = 'bold'
 
             if self.font_family is not inherit:
@@ -386,3 +386,25 @@ class RunStyle:
 
     def same_border(self, other):
         return self.get_border_css({}) == other.get_border_css({})
+
+
+def find_tests():
+    import unittest
+
+    from lxml import etree
+
+    from calibre.ebooks.docx.names import DOCXNamespace
+
+    class TestRunStyle(unittest.TestCase):
+        def css(self, rpr):
+            ns = DOCXNamespace()
+            rPr = etree.fromstring(f'<w:rPr xmlns:w="{ns.namespaces["w"]}">{rpr}</w:rPr>')
+            return RunStyle(ns, rPr).css
+
+        def test_bold(self):
+            # a numbering level rPr that does not set bold must not make the text bold
+            self.assertNotIn('font-weight', self.css('<w:i/>'))
+            self.assertNotIn('font-weight', self.css('<w:b w:val="0"/>'))
+            self.assertEqual(self.css('<w:b/>')['font-weight'], 'bold')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestRunStyle)

@@ -673,18 +673,22 @@ class HeuristicProcessor:
 
     def detect_whitespace(self, html):
         blanks_around_headings = re.compile(
-            r'(?P<initparas>(<(p|div)[^>]*>\s*</(p|div)>\s*){1,}\s*)?'
-            r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
+            r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
+            r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
+        # The \s* around the blank paragraphs are followed by a tag (which starts with <) or by the
+        # content, so possessive \s*+ gives the same matches. The {1,} repeats stay greedy: with fewer
+        # repeats the content can start at the last blank paragraph (an empty scene break), and that
+        # match must still be found.
         blanks_around_scene_breaks = re.compile(
-            r'(?P<initparas>(<(p|div)[^>]*>\s*</(p|div)>\s*){1,}\s*)?'
-            r'(?P<content><p class="scenebreak"[^>]*>.*?</p>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
+            r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
+            r'(?P<content><p class="scenebreak"[^>]*+>.*?</p>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
         blanks_n_nopunct = re.compile(
-            r'(?P<initparas>(<p[^>]*>\s*</p>\s*){1,}\s*)?<p[^>]*>\s*(<(span|[ibu]|em|strong|font)[^>]*>\s*)*'
-            r'.{1,100}?[^\W](</(span|[ibu]|em|strong|font)>\s*)*</p>(?P<endparas>\s*(<p[^>]*>\s*</p>\s*){1,})?',
+            r'(?P<initparas>(<p[^>]*+>\s*+</p>\s*+){1,}\s*+)?<p[^>]*>\s*(<(span|[ibu]|em|strong|font)[^>]*>\s*)*'
+            r'.{1,100}?[^\W](</(span|[ibu]|em|strong|font)>\s*)*</p>(?P<endparas>\s*+(<p[^>]*+>\s*+</p>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
 
@@ -1460,5 +1464,70 @@ def find_tests():
                 self.assertEqual(hp.cleanup_markup(html), expected, html)
             pad = ' ' * 700
             self.assert_fast(self.processor().cleanup_markup, f'<b>{pad}<b>{pad}<i>{pad}x')
+
+        def test_detect_whitespace(self):
+            for attrs, html, expected in (
+                (
+                    {},
+                    '<p>Text.</p>\n<p></p>\n<p> </p>\n<h2>Head</h2>\n<p></p>\n<p>More.</p>',
+                    '<p>Text.</p>\n\n\n<h2 style="margin-top:2em;margin-bottom:1em;">Head</h2><p>More.</p>',
+                ),
+                (
+                    {},
+                    ('<p>One.</p>\n<p></p>\n<p></p>\n<p class="scenebreak" style="text-align:center">***</p>\n<p></p>\n<p>After.</p>'),
+                    '<p>One.</p>\n<p class="scenebreak" style="text-align:center">***</p><p>After.</p>',
+                ),
+                (
+                    {},
+                    '<div></div> <div> </div>\n<p class="scenebreak" style="text-align:center">* * *</p>',
+                    '<p class="scenebreak" style="text-align:center">* * *</p>',
+                ),
+                (
+                    {},
+                    ('<p class="scenebreak" style="text-align:center">~</p>\n<div>\n</div>\n<p></p>\n<p>Next.</p>'),
+                    '<p class="scenebreak" style="text-align:center">~</p><p>Next.</p>',
+                ),
+                (
+                    {},
+                    '<p>x</p><p></p><p class="scenebreak" style="text-align:center">-</p>\n\n<p>y</p>',
+                    '<p>x</p><p class="scenebreak" style="text-align:center">-</p>\n\n<p>y</p>',
+                ),
+                (
+                    {},
+                    # An empty scene break between blank paragraphs is still found, as the content
+                    '<div>x</div>\n<p></p>\n<p class="scenebreak" style="text-align:center"></p>\n<p></p>\n<div>y</div>',
+                    '<div>x</div>\n<p class="scenebreak" style="text-align:center"></p><div>y</div>',
+                ),
+                (
+                    {},
+                    ('<p></p>\n<p></p>\n<p>Title line</p>\n<p></p>\n<p>Body text, with punctuation.</p>\n<p></p>'),
+                    (
+                        '\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p>Title line</p>\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p>Body text, with punctuation.</p>\n'
+                        '<p></p>'
+                    ),
+                ),
+                (
+                    {'html_preprocess_sections': 3},
+                    '<p></p>\n<p>Before the first heading</p>\n<p></p><h2>First</h2>\n<p>Text.</p>',
+                    (
+                        '\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p>Before the first heading</p>\n'
+                        '\n'
+                        '\n'
+                        '<h2 style="margin-top:1em;">First</h2>\n'
+                        '<p>Text.</p>'
+                    ),
+                ),
+            ):
+                hp = self.processor(**attrs)
+                self.assertEqual(hp.detect_whitespace(html), expected, html)
+            pad = ' ' * 1000
+            self.assert_fast(self.processor().detect_whitespace, ('<p>' + pad + '</p>' + pad) * 2 + 'text')
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)

@@ -10,6 +10,7 @@ import numbers
 import os
 import re
 import unicodedata
+from functools import lru_cache
 from operator import itemgetter
 from typing import cast
 from weakref import WeakKeyDictionary
@@ -481,6 +482,10 @@ def is_svg_text_tag(x):
     return getattr(x, 'tag', '') in svg_text_tags
 
 
+_dom_name = lru_cache(maxsize=1024)(cssproperties._toDOMname)
+_missing = object()
+
+
 class Style:
     MS_PAT = re.compile(r'^\s*(mso-|panose-|text-underline|tab-interval)')
     viewport_relative_font_size: str = ''
@@ -561,9 +566,9 @@ class Style:
         return self._stylizer.style(elem)
 
     def __getitem__(self, name):
-        domname = cssproperties._toDOMname(name)
-        if hasattr(self, domname):
-            return getattr(self, domname)
+        val = getattr(self, _dom_name(name), _missing)
+        if val is not _missing:
+            return val
         return self._unit_convert(self._get(name))
 
     def _get(self, name):
@@ -953,5 +958,51 @@ def find_tests():
             self.assertEqual(uc(b'12'), 12 * 72.0 / dpi)
             for bad in (None, b'12px', ['12'], object()):
                 self.assertRaises(TypeError, uc, bad)
+
+        def test_style_getitem(self):
+            class Stylizer:
+                profile = None
+                _styles = {}
+
+            class S(Style):
+                def _get(self, name):
+                    return 'raw ' + name
+
+                def _unit_convert(self, value, base=None, font=None):
+                    return 'converted', value
+
+                @property
+                def fooBar(self):
+                    return 'prop'
+
+                @property
+                def zeroValue(self):
+                    return 0
+
+                @property
+                def noneValue(self):
+                    return None
+
+                @property
+                def brokenProp(self):
+                    raise AttributeError('raised inside the property')
+
+                @property
+                def failingProp(self):
+                    raise KeyError('not hidden')
+
+            s = S(object(), Stylizer())
+            for _ in range(2):
+                # CSS names are mapped to the property of the same DOM name
+                self.assertEqual(s['foo-bar'], 'prop')
+                self.assertEqual(s['fooBar'], 'prop')
+                # a falsy value is a value
+                self.assertEqual(s['zero-value'], 0)
+                self.assertIsNone(s['none-value'])
+                # no such property, or one that raises AttributeError: use the computed style
+                for name in ('unknown-prop', '-webkit-foo', 'broken-prop'):
+                    self.assertEqual(s[name], ('converted', 'raw ' + name))
+                # other exceptions are not hidden
+                self.assertRaises(KeyError, s.__getitem__, 'failing-prop')
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestStylizer)

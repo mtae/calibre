@@ -27,7 +27,7 @@ class ConfigWidget(QWidget):
                 ' API key. After that, you can use the Google AI services a limited number of times a day for free.'
                 ' For more extensive use, you will need to setup a <a href="{1}">Google Cloud billing account</a>.'
                 ' Note that Google will use your prompts for their training data unless you setup the billing account.'
-                ' <a href="{2}>Pricing details</a> for different models.'
+                ' <a href="{2}">Pricing details</a> for different models.'
             ).format(
                 '<a href="https://aistudio.google.com/">Google AI Studio</a>',
                 'https://aistudio.google.com/usage',

@@ -294,7 +294,7 @@ def text_chat_implementation(messages: Iterable[ChatMessage], use_model: str = '
         if m.response_id:
             previous_response_id = m.response_id
             idx = len(mcon) - 1 - i
-            messages = mcon[idx:]
+            messages = mcon[idx + 1 :]
             break
     data = {
         'input': [for_assistant(m) for m in messages],
@@ -462,6 +462,42 @@ def find_tests() -> TestSuite:
                     self.assertEqual(model_choice_for_text().id, 'gpt-4.1-mini')
             finally:
                 newest_gpt_models.cache_clear()
+        def test_openai_previous_response_not_resent(self) -> None:
+            sent: list[dict[str, Any]] = []
+
+            def fake_chat_request(data: dict[str, Any], model: Model, use_tools: bool = True) -> dict[str, Any]:
+                sent.append(data)
+                return data
+
+            def run(*messages: ChatMessage) -> dict[str, Any]:
+                sent.clear()
+                with (
+                    patch(f'{__name__}.model_for_use_model', lambda use_model: Model.from_dict({'id': 'gpt-test'})),
+                    patch(f'{__name__}.chat_request', fake_chat_request),
+                    patch(f'{__name__}.read_streaming_response', lambda rq, name: iter(())),
+                ):
+                    tuple(text_chat_implementation(messages))
+                return sent[0]
+
+            user, assistant = ChatMessageType.user, ChatMessageType.assistant
+            # The reply identified by previous_response_id is already known to
+            # the server, only the messages after it must be sent
+            data = run(ChatMessage('q1', user), ChatMessage('a1', assistant, response_id='r1'), ChatMessage('q2', user))
+            self.assertEqual(data['previous_response_id'], 'r1')
+            self.assertEqual(data['input'], [{'role': 'user', 'content': 'q2'}])
+            data = run(
+                ChatMessage('q1', user),
+                ChatMessage('a1', assistant, response_id='r1'),
+                ChatMessage('q2', user),
+                ChatMessage('a2', assistant, response_id='r2'),
+                ChatMessage('q3', user),
+            )
+            self.assertEqual(data['previous_response_id'], 'r2')
+            self.assertEqual(data['input'], [{'role': 'user', 'content': 'q3'}])
+            # Without a response id the whole conversation is sent
+            data = run(ChatMessage('q1', user), ChatMessage('a1', assistant), ChatMessage('q2', user))
+            self.assertNotIn('previous_response_id', data)
+            self.assertEqual([x['content'] for x in data['input']], ['q1', 'a1', 'q2'])
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestOpenAIBackend)
 

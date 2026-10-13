@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from urllib.request import Request
 
 if TYPE_CHECKING:
+    from unittest import TestSuite
+
     from calibre.ai.venice.config import ConfigWidget
 else:
     ConfigWidget = object
@@ -195,6 +197,10 @@ def config_widget() -> ConfigWidget:
 
 def save_settings(config_widget: ConfigWidget) -> None:
     config_widget.save_settings()
+    # the API key may have changed, and with it the list of available models
+    headers.cache_clear()
+    get_available_models.cache_clear()
+    models_by_strategy.cache_clear()
 
 
 def human_readable_model_name(model_id: str) -> str:
@@ -464,6 +470,49 @@ def develop(use_model: str = '', msg: str = '') -> None:
 def develop_structured(use_model: str = '', prompt: str = '') -> None:
     # calibre-debug -c 'from calibre.ai.venice.backend import develop_structured; develop_structured()'
     develop_structured_output(generate_structured_output, prompt, use_model=use_model)
+
+
+def find_tests() -> TestSuite:
+    import unittest
+    from unittest.mock import patch
+
+    from calibre.ai.prefs import encode_secret
+
+    class TestVeniceBackend(unittest.TestCase):
+        def test_venice_save_settings_clears_caches(self) -> None:
+            prefs = {'api_key': encode_secret('old-key')}
+            models = {'data': [{'id': 'old-model'}]}
+
+            class FakeConfigWidget:
+                def save_settings(self) -> None:
+                    prefs['api_key'] = encode_secret('new-key')
+                    models['data'] = [{'id': 'new-model'}]
+
+            def fake_get_cached_resource(path: str, url: str, headers: Sequence[tuple[str, str]] = ()) -> bytes:
+                return json.dumps(models).encode()
+
+            def clear_caches() -> None:
+                headers.cache_clear()
+                get_available_models.cache_clear()
+                models_by_strategy.cache_clear()
+
+            with (
+                patch(f'{__name__}.pref_for_provider', lambda name, key, defval=None: prefs.get(key, defval)),
+                patch(f'{__name__}.get_cached_resource', fake_get_cached_resource),
+            ):
+                clear_caches()
+                try:
+                    self.assertIn(('Authorization', 'Bearer old-key'), headers())
+                    self.assertEqual(tuple(get_available_models()), ('old-model',))
+                    self.assertEqual(models_by_strategy()['medium'].id, 'old-model')
+                    save_settings(FakeConfigWidget())
+                    self.assertIn(('Authorization', 'Bearer new-key'), headers())
+                    self.assertEqual(tuple(get_available_models()), ('new-model',))
+                    self.assertEqual(models_by_strategy()['medium'].id, 'new-model')
+                finally:
+                    clear_caches()
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestVeniceBackend)
 
 
 if __name__ == '__main__':

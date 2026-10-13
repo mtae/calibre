@@ -109,6 +109,9 @@ def config_widget() -> ConfigWidget:
 
 def save_settings(config_widget: ConfigWidget) -> None:
     config_widget.save_settings()
+    # the API key, headers or URL may have changed
+    request_headers.cache_clear()
+    get_available_models.cache_clear()
 
 
 def for_assistant(self: ChatMessage) -> dict[str, Any]:
@@ -221,6 +224,9 @@ def develop_structured(use_model: str = '', prompt: str = '') -> None:
 
 def find_tests() -> TestSuite:
     import unittest
+    from unittest.mock import patch
+
+    from calibre.ai.prefs import encode_secret
 
     class TestOpenAICompatibleBackend(unittest.TestCase):
         def test_api_url_normalization(self) -> None:
@@ -239,6 +245,36 @@ def find_tests() -> TestSuite:
         def test_request_headers_allows_missing_headers_pref(self) -> None:
             headers = request_headers()
             self.assertEqual(headers, (('Content-Type', 'application/json'),))
+
+        def test_save_settings_clears_cached_headers(self) -> None:
+            prefs = {'api_key': encode_secret('old-key'), 'headers': (('X-Custom', 'old'),)}
+            models = {'data': [{'id': 'old-model'}]}
+
+            class FakeConfigWidget:
+                def save_settings(self) -> None:
+                    prefs['api_key'] = encode_secret('new-key')
+                    prefs['headers'] = (('X-Custom', 'new'),)
+                    models['data'] = [{'id': 'new-model'}]
+
+            def fake_download_data(url: str, headers: Sequence[tuple[str, str]] = ()) -> bytes:
+                return json.dumps(models).encode()
+
+            with (
+                patch(f'{__name__}.pref_for_provider', lambda name, key, defval=None: prefs.get(key, defval)),
+                patch(f'{__name__}.download_data', fake_download_data),
+            ):
+                request_headers.cache_clear()
+                get_available_models.cache_clear()
+                try:
+                    self.assertIn(('Authorization', 'Bearer old-key'), request_headers())
+                    self.assertEqual(tuple(get_available_models()), ('old-model',))
+                    save_settings(FakeConfigWidget())
+                    self.assertIn(('Authorization', 'Bearer new-key'), request_headers())
+                    self.assertIn(('X-Custom', 'new'), request_headers())
+                    self.assertEqual(tuple(get_available_models()), ('new-model',))
+                finally:
+                    request_headers.cache_clear()
+                    get_available_models.cache_clear()
 
         def test_parsing_stream_deltas(self) -> None:
             responses = tuple(

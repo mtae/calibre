@@ -813,6 +813,15 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.metadata.rtf import find_tests
 
         a(find_tests())
+        from calibre.ebooks.rtf2xml.ParseRtf import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pml.pmlconverter import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.plugins.epub_input import find_tests
+
+        a(find_tests())
         from calibre.ebooks.metadata.html import find_tests
 
         a(find_tests())
@@ -955,6 +964,18 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.ebooks.compression.palmdoc import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.textile.unsmarten import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pdb.plucker.reader import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.oeb.reader import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.lrf.html.color_map import find_tests
 
         a(find_tests())
         from calibre.gui2.viewer.convert_book import find_tests

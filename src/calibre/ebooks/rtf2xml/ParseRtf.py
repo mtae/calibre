@@ -12,7 +12,9 @@
 #########################################################################
 # $Revision: 1.41 $
 # $Date: 2006/03/24 23:50:07 $
+import io
 import os
+import re
 import sys
 
 from calibre.ebooks.rtf2xml import (
@@ -55,7 +57,7 @@ from calibre.ebooks.rtf2xml import (
 )
 from calibre.ebooks.rtf2xml.old_rtf import OldRtf
 
-from . import open_for_read, open_for_write
+from . import open_for_write
 
 '''
 Here is an example script using the ParseRTF module directly
@@ -597,11 +599,61 @@ class ParseRtf:
         if int(num) > self.__exit_level:
             self.__exit_level = num
 
+    def __read_text(self, path):
+        with open(path, 'rb') as f:
+            raw = f.read()
+        try:
+            return raw.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+        # Raw 8-bit bytes are in the document code page, not UTF-8
+        m = re.search(rb'\\ansicpg(\d+)', raw)
+        encoding = f'cp{m.group(1).decode()}' if m else self.__default_encoding
+        try:
+            return raw.decode(encoding, 'replace')
+        except LookupError:
+            return raw.decode(self.__default_encoding, 'replace')
+
     def __make_temp_file(self, file):
         """Make a temporary file to parse"""
         write_file = 'rtf_write_file'
-        read_obj = file if hasattr(file, 'read') else open_for_read(file)
+        read_obj = file if hasattr(file, 'read') else io.StringIO(self.__read_text(file), newline=None)
         with open_for_write(write_file) as write_obj:
             for line in read_obj:
                 write_obj.write(line)
         return write_file
+
+
+def find_tests():
+    import unittest
+
+    from calibre import CurrentDir
+    from calibre.ptempfile import TemporaryDirectory
+
+    class ParseRtfTest(unittest.TestCase):
+        def convert(self, raw, **kw):
+            with TemporaryDirectory() as tdir, CurrentDir(tdir):
+                with open('in.rtf', 'wb') as f:
+                    f.write(raw)
+                ParseRtf(
+                    in_file='in.rtf', out_file='out.xml', run_level=1, no_dtd=1, indent=0, convert_symbol=1,
+                    convert_wingdings=1, convert_zapf=1, convert_caps=1, empty_paragraphs=1, **kw
+                ).parse_rtf()
+                with open('out.xml', encoding='utf-8') as f:
+                    return f.read()
+
+        def test_raw_8bit_bytes_use_rtf_codepage(self):
+            def rtf(text, header):
+                return b'{\n\\rtf1\\ansi' + header + b'\\deff0\n{\\fonttbl{\\f0 Times;}}\n\\pard ' + text + b'\\par\n}\n'
+
+            out = self.convert(rtf('café naïve'.encode('cp1252'), b'\\ansicpg1252'))
+            self.assertIn('café naïve', out)
+            self.assertNotIn('\ufffd', out)
+            # No \ansicpg: the default encoding is used
+            out = self.convert(rtf('привет'.encode('cp1251'), b''), default_encoding='cp1251')
+            self.assertIn('привет', out)
+            self.assertNotIn('\ufffd', out)
+            # Valid UTF-8 is still read as UTF-8
+            self.assertIn('café', self.convert(rtf('café'.encode(), b'\\ansicpg1252')))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(ParseRtfTest)

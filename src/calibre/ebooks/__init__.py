@@ -236,73 +236,56 @@ UNIT_RE = re.compile(r'^(-*[0-9]*[.]?[0-9]*)\s*(%|em|ex|en|px|mm|cm|in|pt|pc|rem
 
 @lru_cache(maxsize=2048)
 def _parse_length(value):
-    # Split a CSS length string into (number, unit), where unit is None for a
-    # plain number. Returns None if the string is not a length we understand.
-    # unit_convert() is called very often with the same few values.
-    try:
+    # (number, unit) for a CSS length, unit is None for a plain number. None if
+    # value is not a length. Cached as unit_convert() is called for most CSS
+    # properties of every element, with the same few dozen strings.
+    with suppress(Exception):
         return float(value), None
-    except Exception:
-        pass
     m = UNIT_RE.match(value)
     if m is not None and m.group(1):
         try:
-            number = float(m.group(1))
+            return float(m.group(1)), m.group(2)
         except ValueError:
-            number = 0
-        return number, m.group(2)
+            return 0, m.group(2)
 
 
 def unit_convert(value, base, font, dpi, body_font_size=12):
     "Return value in pts"
     if isinstance(value, numbers.Number):
         return value
-    if isinstance(value, str):
-        parsed = _parse_length(value)
-    else:
-        with suppress(Exception):
-            return float(value) * 72.0 / dpi
-        m = UNIT_RE.match(value)
-        parsed = None
-        if m is not None and m.group(1):
-            try:
-                number = float(m.group(1))
-            except ValueError:
-                number = 0
-            parsed = number, m.group(2)
-    if parsed is None:
-        return value
-    original = value
-    value, unit = parsed
-    if unit is None:
-        try:
-            return value * 72.0 / dpi
-        except Exception:  # same as the original suppress(Exception) path
-            return original
     result = value
-    if unit == '%':
-        result = (value / 100.0) * base
-    elif unit == 'px':
-        result = value * 72.0 / dpi
-    elif unit == 'in':
-        result = value * 72.0
-    elif unit == 'pt':
-        result = value
-    elif unit == 'em':
-        result = value * font
-    elif unit in ('ex', 'en'):
-        # This is a hack for ex since we have no way to know
-        # the x-height of the font
-        result = value * font * 0.5
-    elif unit == 'pc':
-        result = value * 12.0
-    elif unit == 'mm':
-        result = value * 2.8346456693
-    elif unit == 'cm':
-        result = value * 28.346456693
-    elif unit == 'rem':
-        result = value * body_font_size
-    elif unit == 'q':
-        result = value * 0.708661417325
+    parsed = _parse_length(value)
+    if parsed is not None:
+        value, unit = parsed
+        if unit is None:
+            try:
+                return value * 72.0 / dpi
+            except Exception:
+                return result
+        if unit == '%':
+            result = (value / 100.0) * base
+        elif unit == 'px':
+            result = value * 72.0 / dpi
+        elif unit == 'in':
+            result = value * 72.0
+        elif unit == 'pt':
+            result = value
+        elif unit == 'em':
+            result = value * font
+        elif unit in ('ex', 'en'):
+            # This is a hack for ex since we have no way to know
+            # the x-height of the font
+            result = value * font * 0.5
+        elif unit == 'pc':
+            result = value * 12.0
+        elif unit == 'mm':
+            result = value * 2.8346456693
+        elif unit == 'cm':
+            result = value * 28.346456693
+        elif unit == 'rem':
+            result = value * body_font_size
+        elif unit == 'q':
+            result = value * 0.708661417325
     return result
 
 

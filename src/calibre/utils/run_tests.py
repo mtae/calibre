@@ -894,6 +894,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.html_entities import find_tests
 
         a(find_tests())
+        from calibre.ebooks.oeb.stylizer import find_tests
+
+        a(find_tests())
         from calibre.ebooks.pdf.bidi_test import find_tests
 
         a(find_tests())

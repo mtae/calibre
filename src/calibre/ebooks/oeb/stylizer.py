@@ -482,7 +482,7 @@ def is_svg_text_tag(x):
     return getattr(x, 'tag', '') in svg_text_tags
 
 
-_dom_name = lru_cache(maxsize=None)(cssproperties._toDOMname)
+_dom_name = lru_cache(maxsize=1024)(cssproperties._toDOMname)
 _missing = object()
 
 
@@ -907,3 +907,102 @@ class Style:
     @property
     def is_hidden(self):
         return self._style.get('display') == 'none' or self._style.get('visibility') == 'hidden'
+
+
+def find_tests():
+    import unittest
+
+    class TestStylizer(unittest.TestCase):
+        def test_unit_convert(self):
+            base, font, dpi, body = 300, 14, 166, 12
+
+            def uc(value, **kw):
+                return unit_convert(value, kw.get('base', base), kw.get('font', font), kw.get('dpi', dpi), body_font_size=body)
+
+            factors = {
+                '%': lambda v: (v / 100.0) * base, 'px': lambda v: v * 72.0 / dpi, 'in': lambda v: v * 72.0,
+                'pt': lambda v: v, 'em': lambda v: v * font, 'ex': lambda v: v * font * 0.5, 'en': lambda v: v * font * 0.5,
+                'pc': lambda v: v * 12.0, 'mm': lambda v: v * 2.8346456693, 'cm': lambda v: v * 28.346456693,
+                'rem': lambda v: v * body, 'q': lambda v: v * 0.708661417325,
+            }
+            # the second round is answered from any cache, the results must not depend on it
+            for _ in range(2):
+                for n in (0, 12, -3, 1.5, True):
+                    self.assertIs(uc(n), n)
+                for unit, func in factors.items():
+                    for num in ('0', '1', '2.5', '-3', '.5', '10.'):
+                        for sep in ('', ' '):
+                            self.assertEqual(uc(num + sep + unit), func(float(num)), num + sep + unit)
+                    # a number that float() rejects counts as zero
+                    self.assertEqual(uc('-' + unit), func(0))
+                    self.assertEqual(uc('--2' + unit), func(0))
+                # plain numbers are pixels
+                for s in ('12', '-0.5', '1e3', ' 12 ', '1_0', 'inf', '1e999'):
+                    self.assertEqual(uc(s), float(s) * 72.0 / dpi, s)
+                # anything else is returned unchanged
+                for s in ('', 'auto', 'inherit', 'em', '12foo', '1 2px', '12px ', '12PX', '1.5.2em'):
+                    self.assertIs(uc(s), s, s)
+            # only the parse can be cached: base, font and dpi change the result
+            self.assertEqual(uc('2em', font=10), 20)
+            self.assertEqual(uc('50%', base=80), 40)
+            self.assertEqual(uc('12px', dpi=72), 12)
+            self.assertEqual(uc('1.5', dpi=36), 3)
+            # dpi == 0 (or unusable): a plain number is not converted, the units that need dpi raise
+            self.assertEqual(uc('12', dpi=0), '12')
+            self.assertEqual(uc('12', dpi=None), '12')
+            self.assertEqual(uc('12pt', dpi=0), 12)
+            self.assertEqual(uc('2em', dpi=0), 28)
+            self.assertRaises(ZeroDivisionError, uc, '12px', dpi=0)
+            self.assertEqual(uc(5, dpi=0), 5)
+            # input that is not a str
+            self.assertEqual(uc(b'12'), 12 * 72.0 / dpi)
+            for bad in (None, b'12px', ['12'], object()):
+                self.assertRaises(TypeError, uc, bad)
+
+        def test_style_getitem(self):
+            class Stylizer:
+                profile = None
+                _styles = {}
+
+            class S(Style):
+                def _get(self, name):
+                    return 'raw ' + name
+
+                def _unit_convert(self, value, base=None, font=None):
+                    return 'converted', value
+
+                @property
+                def fooBar(self):
+                    return 'prop'
+
+                @property
+                def zeroValue(self):
+                    return 0
+
+                @property
+                def noneValue(self):
+                    return None
+
+                @property
+                def brokenProp(self):
+                    raise AttributeError('raised inside the property')
+
+                @property
+                def failingProp(self):
+                    raise KeyError('not hidden')
+
+            s = S(object(), Stylizer())
+            for _ in range(2):
+                # CSS names are mapped to the property of the same DOM name
+                self.assertEqual(s['foo-bar'], 'prop')
+                self.assertEqual(s['fooBar'], 'prop')
+                # a falsy value is a value
+                self.assertEqual(s['zero-value'], 0)
+                self.assertIsNone(s['none-value'])
+                # no such property, or one that raises AttributeError: use the computed style
+                for name in ('unknown-prop', '-webkit-foo', 'broken-prop'):
+                    self.assertEqual(s[name], ('converted', 'raw ' + name))
+                # other exceptions are not hidden
+                self.assertRaises(KeyError, s.__getitem__, 'failing-prop')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestStylizer)

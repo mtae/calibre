@@ -265,7 +265,7 @@ def find_tests():
                             raise AssertionError('Reading past the end of the file')
                     return ans
 
-            for raw in (rb'{\rtf1\ansi{\info{\title Test}', b'{\\rtf1\\ansi{\\info{\\title Test}\\'):
+            for raw in (rb'{\rtf1\ansi{\info{\title Test}', rb'{\rtf1\ansi{\info{\title Test}\\'):
                 stream = Stream(raw)
                 self.assertTrue(get_document_info(stream)[0].startswith(rb'{\info'))
                 stream.seek(0)

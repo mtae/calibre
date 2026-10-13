@@ -79,7 +79,7 @@ class EmailAccounts(QAbstractTableModel):  # {{{
         elif col == 3:
 
             def key(account_key):
-                return numeric_sort_key(as_unicode(self.accounts[account_key][0]) or '')
+                return bool(self.accounts[account_key][1])
 
         elif col == 4:
 
@@ -327,6 +327,13 @@ def find_tests():
             self.assertEqual([m.data(m.index(0, c), role) for c in (0, 2, 4, 5)], [new, 'My subject', 'Alice', 'tagx'])
             for d in (m.accounts, m.subjects, m.aliases, m.tags):
                 self.assertEqual(list(d), [new])
+        def test_sort_by_auto_send(self):
+            accounts = {'a@x.com': ['AZW3', True, False], 'b@x.com': ['EPUB', False, False], 'c@x.com': ['MOBI', True, False]}
+            model = EmailAccounts(accounts, {})
+            model.sort(3, Qt.SortOrder.AscendingOrder)
+            self.assertEqual(model.account_order, ['b@x.com', 'a@x.com', 'c@x.com'], 'unchecked rows come first')
+            model.sort(3, Qt.SortOrder.DescendingOrder)
+            self.assertEqual(model.account_order, ['a@x.com', 'c@x.com', 'b@x.com'], 'checked rows come first')
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(TestEmailAccounts)
 

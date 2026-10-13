@@ -855,6 +855,12 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.comments_editor import find_tests
 
         a(find_tests())
+        from calibre.gui2.preferences.look_feel_tabs import find_tests
+
+        a(find_tests())
+        from calibre.gui2.preferences.emailp import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html_entities import find_tests
 
         a(find_tests())

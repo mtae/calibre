@@ -486,11 +486,12 @@ class Rules(QWidget):
         items = self.rule_list.selectedItems()
         if current_item is None or not items or not len(items):
             return
-        row_map = {id(item): self.rule_list.row(item) for item in items}
-        items.sort(key=lambda item: row_map[id(item)])
+        # Move the item furthest along the direction of travel first, so that
+        # moving it does not change the rows of the items still to be moved
+        items.sort(key=self.rule_list.row, reverse=delta > 0)
         num = self.rule_list.count()
         for item in items:
-            row = row_map[id(item)]
+            row = self.rule_list.row(item)
             nrow = (row + delta + num) % num
             self.rule_list.takeItem(row)
             self.rule_list.insertItem(nrow, item)
@@ -704,6 +705,7 @@ class RulesDialog(Dialog, SaveLoadMixin):
 
 def find_tests():
     import unittest
+    from types import SimpleNamespace
 
     class TestRuleSearch(unittest.TestCase):
         def test_rows_matching(self):
@@ -724,7 +726,59 @@ def find_tests():
             self.assertEqual(next_match(matches, 1, forward=False), 5)
             self.assertEqual(next_match(matches, -1, forward=False), 5)
 
-    return unittest.defaultTestLoader.loadTestsFromTestCase(TestRuleSearch)
+    class FakeRuleList:
+        # The parts of QListWidget used by Rules.move_selected(), so it can be
+        # run without a QApplication
+
+        def __init__(self, items, selected):
+            self.items, self.selected = list(items), selected
+
+        def row(self, item):
+            return self.items.index(item)
+
+        def count(self):
+            return len(self.items)
+
+        def takeItem(self, row):
+            return self.items.pop(row)
+
+        def insertItem(self, row, item):
+            self.items.insert(row, item)
+
+        def currentItem(self):
+            return self.selected[0]
+
+        def selectedItems(self):
+            return list(self.selected)
+
+        def selectionModel(self):
+            return self
+
+        def indexFromItem(self, item):
+            return item
+
+        def select(self, *args):
+            pass
+
+        def setCurrentIndex(self, *args):
+            pass
+
+    class TestMoveSelected(unittest.TestCase):
+        def test_move_selected_keeps_all_rules(self):
+            def move(selected, delta):
+                rules = SimpleNamespace(rule_list=FakeRuleList('abcd', selected), changed=SimpleNamespace(emit=lambda: None))
+                Rules.move_selected(rules, delta)
+                return ''.join(rules.rule_list.items)
+
+            self.assertEqual(move('b', 1), 'acbd')
+            self.assertEqual(move('bc', 1), 'adbc')
+            self.assertEqual(move('cb', 1), 'adbc')
+            self.assertEqual(move('bc', -1), 'bcad')
+            self.assertEqual(move('ab', -1), 'cdab', 'rules moving up past the top wrap to the bottom')
+            self.assertEqual(move('cd', 1), 'cdab', 'rules moving down past the bottom wrap to the top')
+
+    loader = unittest.defaultTestLoader
+    return unittest.TestSuite((loader.loadTestsFromTestCase(TestRuleSearch), loader.loadTestsFromTestCase(TestMoveSelected)))
 
 
 if TYPE_CHECKING:

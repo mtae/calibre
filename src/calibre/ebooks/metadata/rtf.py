@@ -52,6 +52,8 @@ def get_document_info(stream):
     pos = stream.tell()
     while True:
         ch = stream.read(1)
+        if not ch:
+            break
         if ch == b'\\':
             data.append(ch + stream.read(1))
             continue
@@ -250,5 +252,23 @@ def find_tests():
             o = get_metadata(stream)
             for attr in 'title authors publisher comments tags'.split():
                 self.assertEqual(getattr(m, attr), getattr(o, attr))
+
+        def test_rtf_truncated_info(self):
+            class Stream(BytesIO):
+                eof_reads = 0
+
+                def read(self, n=-1):
+                    ans = super().read(n)
+                    if n == 1 and not ans:
+                        self.eof_reads += 1
+                        if self.eof_reads > 10:
+                            raise AssertionError('Reading past the end of the file')
+                    return ans
+
+            for raw in (rb'{\rtf1\ansi{\info{\title Test}', b'{\\rtf1\\ansi{\\info{\\title Test}\\'):
+                stream = Stream(raw)
+                self.assertTrue(get_document_info(stream)[0].startswith(rb'{\info'))
+                stream.seek(0)
+                self.assertEqual(get_metadata(stream).title, 'Test')
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

@@ -38,5 +38,39 @@ def get_metadata(stream):
     if len(covers) > 1:
         if covers[1][1] == covers[0][1] + '-standard':
             idx = 1
-    mi.cover_data = ('jpg', covers[idx][0])
+    if covers:
+        mi.cover_data = ('jpg', covers[idx][0])
     return mi
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    opf = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="2.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:title>Test</dc:title><dc:creator>An Author</dc:creator></metadata><manifest/><spine/><guide>%s</guide></package>'
+    )
+
+    class Container:
+        def __init__(self, stream, log):
+            manifest = {'a': SimpleNamespace(path='cover.jpg', internal='c1')}
+            self._litfile = SimpleNamespace(manifest=manifest, get_file=lambda name: b'cover data')
+
+    class Test(unittest.TestCase):
+        def read_metadata(self, guide):
+            Container.get_metadata = lambda self: opf % guide
+            with patch('calibre.ebooks.lit.reader.LitContainer', Container):
+                return get_metadata(None)
+
+        def test_lit_metadata_without_cover(self):
+            for guide in ('', '<reference type="cover" href="missing.jpg"/>'):
+                mi = self.read_metadata(guide)
+                self.assertEqual(mi.title, 'Test')
+                self.assertEqual(mi.authors, ['An Author'])
+                self.assertFalse(mi.cover_data[1])
+            mi = self.read_metadata('<reference type="cover" href="cover.jpg"/>')
+            self.assertEqual(mi.cover_data, ('jpg', b'cover data'))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

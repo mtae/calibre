@@ -693,11 +693,16 @@ class HeuristicProcessor:
         return html
 
     def detect_soft_breaks(self, html):
-        line = '(?P<initline>' + self.line_open + r'(?P<init_content>.*?)' + self.line_close + ')'
+        # line_open ends with a greedy \s* and line_close starts with one, so the
+        # content of the first match never starts or ends with whitespace. Saying so
+        # gives the same matches without trying every way of splitting a run of
+        # whitespace between them, which is cubic on lines that do not match.
+        content = r'(?!\s)(?P<{}>(?:.*?\S)??)'
+        line = '(?P<initline>' + self.line_open + content.format('init_content') + self.line_close + ')'
         line_two = (
             '(?P<line_two>'
             + re.sub(r'(ou|in|cha)', 'linetwo_', self.line_open)
-            + r'(?P<line_two_content>.*?)'
+            + content.format('line_two_content')
             + re.sub(r'(ou|in|cha)', 'linetwo_', self.line_close)
             + ')'
         )
@@ -734,7 +739,9 @@ class HeuristicProcessor:
             + self.common_in_text_beginnings
             + '|.*?'
             + self.common_in_text_endings
-            + r'<))(?P<break>((?P<break_char>((?!\s)\W))\s*(?P=break_char)?){1,10})\s*'
+            # \s*+ and no \s* before line_close, which starts with one: whitespace
+            # given back could not be matched by what follows anyway
+            + r'<))(?P<break>((?P<break_char>((?!\s)\W))\s*+(?P=break_char)?){1,10})'
             + self.line_close
         )
         scene_breaks = re.compile(rf'{scene_break_regex}', re.IGNORECASE | re.UNICODE)
@@ -1066,3 +1073,74 @@ class HeuristicProcessor:
             # put back non-breaking spaces in empty paragraphs so they render correctly
             html = self.anyblank.sub(r'\n\g<openline>' + '\u00a0' + r'\g<closeline>', html)
         return html
+
+
+def find_tests():
+    import time
+    import unittest
+
+    SOFTBREAK = '<p class="softbreak" style="margin-top:.5em; page-break-before:avoid; text-align:center"> </p>'
+    SOFTBREAK_1EM = SOFTBREAK.replace('.5em', '1em')
+    SCENEBREAK = '<p class="scenebreak" style="text-align:center; text-indent:0%; margin-top:1em; margin-bottom:1em; page-break-before:avoid">'
+
+    class HeuristicRegexTest(unittest.TestCase):
+        def processor(self, narrow=False, **attrs):
+            hp = HeuristicProcessor()
+            for k, v in attrs.items():
+                setattr(hp, k, v)
+            if narrow:  # the patterns __call__() uses for pdftohtml output
+                hp.line_open = r'<(?P<outer>p)[^>]*>(\s*<[ibu][^>]*>)?\s*'
+                hp.line_close = r'\s*(</[ibu][^>]*>\s*)?</(?P=outer)>'
+            return hp
+
+        def assert_fast(self, func, *args):
+            start = time.process_time()
+            func(*args)
+            # Patterns that backtrack take seconds on these inputs, linear ones milliseconds
+            self.assertLess(time.process_time() - start, 0.5)
+
+        def test_soft_and_scene_breaks(self):
+            for narrow, opts, html, expected in (
+                (False, {}, '<p>He left.</p>\n<div> </div>\n<p>She stayed.</p>', f'<p>He left.</p>\n{SOFTBREAK}\n<p>She stayed.</p>'),
+                (
+                    False,
+                    {},
+                    '<p>  <span> He left. </span> </p>\n<div>\n</div>\n<p><i>She stayed!</i>  </p>',
+                    f'<p>  <span> He left. </span> </p>\n{SOFTBREAK}\n<p><i>She stayed!</i>  </p>',
+                ),
+                (False, {}, '<p>Chapter heading</p><div></div><p>Next.</p>', '<p>Chapter heading</p><div></div><p>Next.</p>'),
+                (
+                    False,
+                    {},
+                    '<p>One.</p>\n<p> </p>\n<p>Two.</p>\n<p class="softbreak"> </p><p>Three.</p>',
+                    f'<p>One.</p>\n{SOFTBREAK}\n<p>Two.</p>\n<p class="softbreak"> </p><p>Three.</p>',
+                ),
+                (
+                    False,
+                    {'blanks_between_paragraphs': True},
+                    '<p>One.</p>\n<p></p>\n<div> </div><p> </p>\n<p>Two.</p>\n<p></p><p></p><h2>Head</h2>',
+                    f'<p>One.</p>\n{SOFTBREAK_1EM}\n<p>Two.</p>\n<p></p><p></p><h2>Head</h2>',
+                ),
+                (True, {}, '<p><i> He left.</i></p>\n<div> </div>\n<p>She stayed.</p>', f'<p><i> He left.</i></p>\n{SOFTBREAK}\n<p>She stayed.</p>'),
+            ):
+                self.assertEqual(self.processor(narrow, **opts).detect_soft_breaks(html), expected, html)
+            for narrow, html, expected in (
+                (False, '<p>* * *</p>\n<p>Text here.</p>\n<p>  ***  </p>', f'{SCENEBREAK}* * *</p>\n<p>Text here.</p>\n{SCENEBREAK}***  </p>'),
+                (
+                    False,
+                    '<p> <span> ~ ~ ~ </span> </p>\n<div><b>---</b></div>\n<p>- - - - - -</p>',
+                    f'{SCENEBREAK}~ ~ ~</p>\n{SCENEBREAK}---</p>\n{SCENEBREAK}- - - - - -</p>',
+                ),
+                (
+                    False,
+                    '<p>Hello there.</p>\n<p>"Quoted."</p>\n<p>*</p>\n<p>**x</p>\n<p>&nbsp;</p>',
+                    f'<p>Hello there.</p>\n<p>"Quoted."</p>\n{SCENEBREAK}*</p>\n<p>**x</p>\n<p>&nbsp;</p>',
+                ),
+                (True, '<p><b> # # # </b></p>\n<p>Text.</p>', f'{SCENEBREAK}# # #</p>\n<p>Text.</p>'),
+            ):
+                self.assertEqual(self.processor(narrow).detect_scene_breaks(html), expected, html)
+            pad = ' ' * 350
+            self.assert_fast(self.processor().detect_soft_breaks, f'<p>{pad}x{pad}<b></p>')
+            self.assert_fast(self.processor().detect_scene_breaks, f'<p>*{pad}x;</p>')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)

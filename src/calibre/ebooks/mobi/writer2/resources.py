@@ -2,10 +2,13 @@
 # License: GPLv3 Copyright: 2012, Kovid Goyal <kovid@kovidgoyal.net>
 
 import os
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 from PIL import Image, ImageOps
 
+from calibre import detect_ncpus
 from calibre.ebooks import generate_masthead
 from calibre.ebooks.mobi import MAX_THUMB_DIMEN, MAX_THUMB_SIZE
 from calibre.ebooks.mobi.utils import mobify_image, rescale_image, write_font_record
@@ -16,6 +19,11 @@ from calibre.utils.imghdr import what
 # Image formats calibre can read but that no MOBI/AZW3 viewer can display, so
 # they are converted to PNG before being added to the book
 UNSUPPORTED_IMAGE_TYPES = frozenset({'image/webp', 'image/avif'})
+
+# Decoding and re-encoding images is done inside Qt/PIL, which release the GIL,
+# so a few threads give a near linear speedup on image heavy books. The cap
+# bounds the number of images held decoded in memory at the same time.
+MAX_IMAGE_THREADS = 4
 
 PLACEHOLDER_GIF = b'GIF89a\x01\x00\x01\x00\xf0\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00!\xfe calibre-placeholder-gif-for-azw3\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'  # noqa: E501
 
@@ -43,6 +51,7 @@ def process_jpegs_for_amazon(data: bytes) -> bytes:
 
 def find_tests():
     import struct
+    import time
     import unittest
 
     class TestProcessJpegsForAmazon(unittest.TestCase):
@@ -99,7 +108,139 @@ def find_tests():
             result = process_jpegs_for_amazon(data)
             self.assertFalse(self._has_exif_segment(result))
 
-    return unittest.defaultTestLoader.loadTestsFromTestCase(TestProcessJpegsForAmazon)
+    class TestImageProcessing(unittest.TestCase):
+        # Resources.add_resources() must give the same records, indices and
+        # warnings however many threads are used to process the images
+
+        class Item:
+
+            def __init__(self, stats, n, href, media_type='image/png', data_error=False):
+                self.stats, self.n, self.href, self.media_type = stats, n, href, media_type
+                self.data_error, self.loaded = data_error, False
+
+            @property
+            def data(self):
+                if self.data_error:
+                    raise ValueError('cannot read')
+                with self.stats.lock:
+                    if not self.loaded:
+                        self.loaded = True
+                        self.stats.loaded += 1
+                        self.stats.max_loaded = max(self.stats.max_loaded, self.stats.loaded)
+                return b'img%d' % self.n
+
+            def unload_data_from_memory(self):
+                with self.stats.lock:
+                    if self.loaded:
+                        self.loaded = False
+                        self.stats.loaded -= 1
+
+        class Log:
+
+            def __init__(self):
+                self.warnings = []
+
+            def info(self, *a):
+                pass
+
+            def warn(self, msg):
+                self.warnings.append(msg)
+
+        def run_resources(self, num_images, ncpus, bad=(), unreadable=(), delay=0.004):
+            import threading
+            from types import SimpleNamespace
+            from unittest.mock import patch
+
+            stats = SimpleNamespace(lock=threading.Lock(), loaded=0, max_loaded=0, running=0, max_running=0, threads=set())
+            items = [self.Item(stats, n, f'img{n}.png', data_error=n in unreadable) for n in range(num_images)]
+            items.insert(1, SimpleNamespace(media_type='text/html', href='a.html'))
+            log = self.Log()
+            oeb = SimpleNamespace(
+                log=log, logger=log, guide={}, metadata=SimpleNamespace(cover=[]),
+                manifest=SimpleNamespace(values=lambda: items, ids={}))
+
+            def process_image(self_, data):
+                with stats.lock:
+                    stats.threads.add(threading.get_ident())
+                    stats.running += 1
+                    stats.max_running = max(stats.max_running, stats.running)
+                try:
+                    # earlier images take longer so that results complete out of order
+                    time.sleep(delay * max(0, num_images - int(data[3:])))
+                    if int(data[3:]) in bad:
+                        raise ValueError('bad image')
+                    return b'GIF89a' + data
+                finally:
+                    with stats.lock:
+                        stats.running -= 1
+
+            with patch.object(Resources, 'process_image', process_image), patch(
+                    'calibre.ebooks.mobi.writer2.resources.detect_ncpus', return_value=ncpus, create=True):
+                r = Resources(oeb, SimpleNamespace(mobi_keep_original_images=False), False)
+            return r, log, stats
+
+        def check_output(self, r, log, num_images, bad=(), unreadable=()):
+            good = [n for n in range(num_images) if n not in bad and n not in unreadable]
+            self.assertEqual(r.records, [b'GIF89a' + b'img%d' % n for n in good])
+            self.assertEqual(r.item_map, {f'img{n}.png': i + 1 for i, n in enumerate(good)})
+            self.assertEqual(set(r.mime_map.values()), {'image/gif'} if good else set())
+            self.assertEqual(r.image_indices, set(range(len(good))))
+            self.assertEqual(log.warnings, [f'Bad image file {f"img{n}.png"!r}' for n in range(num_images) if n in bad or n in unreadable])
+
+        def test_same_result_for_any_number_of_cpus(self):
+            import threading
+            for ncpus in (1, 2, 3, 4, 16):
+                r, log, stats = self.run_resources(10, ncpus, bad={3, 9}, unreadable={6})
+                self.check_output(r, log, 10, bad={3, 9}, unreadable={6})
+                threads = min(ncpus, 4)
+                self.assertLessEqual(stats.max_running, threads)
+                self.assertLessEqual(stats.max_loaded, 2 * threads if threads > 1 else 1)
+                self.assertEqual(stats.loaded, 0)  # all unloaded
+                if threads == 1:
+                    self.assertEqual(stats.threads, {threading.get_ident()})
+
+        def test_single_image_is_processed_on_the_calling_thread(self):
+            import threading
+            r, log, stats = self.run_resources(1, 8)
+            self.check_output(r, log, 1)
+            self.assertEqual(stats.threads, {threading.get_ident()})
+            r, log, stats = self.run_resources(1, 8, bad={0})
+            self.check_output(r, log, 1, bad={0})
+
+        def test_images_are_processed_concurrently(self):
+            r, log, stats = self.run_resources(8, 4)
+            self.check_output(r, log, 8)
+            self.assertGreater(stats.max_running, 1)
+
+    def load(x):
+        return unittest.defaultTestLoader.loadTestsFromTestCase(x)
+
+    return unittest.TestSuite((load(TestProcessJpegsForAmazon), load(TestImageProcessing)))
+
+
+class _Failed:
+
+    def __init__(self, err):
+        self.err = err
+
+    def result(self):
+        raise self.err
+
+    def cancel(self):
+        pass
+
+
+class _Deferred:
+    # Runs the function when the result is asked for, like the sequential code did
+
+    def __init__(self, func, arg):
+        self.func, self.arg = func, arg
+
+    def result(self):
+        return self.func(self.arg)
+
+    def cancel(self):
+        pass
 
 
 class Resources:
@@ -139,6 +280,48 @@ class Resources:
                 os.remove(pt.name)
             return func(data)
 
+    def process_images_in_parallel(self, items):
+        """
+        Yield (item, getter) for each item, in order. Calling getter() returns
+        the processed image data, or raises the exception process_image() raised.
+        Images are processed by a small pool of threads, a bounded number ahead
+        of the consumer, so results (and their order) are identical to
+        processing them one by one, only faster on multi-core machines.
+        """
+        nthreads = min(detect_ncpus(), MAX_IMAGE_THREADS) if len(items) > 1 else 1
+        pool = ThreadPoolExecutor(max_workers=nthreads) if nthreads > 1 else None
+
+        def start(item):
+            if item.media_type.lower() in UNSUPPORTED_IMAGE_TYPES:
+                self.convert_unsupported_image(item)
+            try:
+                data = item.data
+            except Exception as err:
+                return _Failed(err)
+            if pool is None:
+                return _Deferred(self.process_image, data)
+            return pool.submit(self.process_image, data)
+
+        pending = deque()
+        todo = iter(items)
+        window = 2 * nthreads if pool is not None else 1
+        try:
+            while True:
+                while len(pending) < window:
+                    item = next(todo, None)
+                    if item is None:
+                        break
+                    pending.append((item, start(item)))
+                if not pending:
+                    break
+                item, future = pending.popleft()
+                yield item, future.result
+        finally:
+            for _, future in pending:
+                future.cancel()
+            if pool is not None:
+                pool.shutdown()
+
     def add_resources(self, add_fonts):
         oeb = self.oeb
         oeb.logger.info('Serializing resources...')
@@ -165,13 +348,10 @@ class Resources:
             item = oeb.manifest.ids[cover_id]
             cover_href = item.href
 
-        for item in self.oeb.manifest.values():
-            if item.media_type not in OEB_RASTER_IMAGES:
-                continue
-            if item.media_type.lower() in UNSUPPORTED_IMAGE_TYPES:
-                self.convert_unsupported_image(item)
+        raster_items = [item for item in self.oeb.manifest.values() if item.media_type in OEB_RASTER_IMAGES]
+        for item, get_processed_data in self.process_images_in_parallel(raster_items):
             try:
-                data = self.process_image(item.data)
+                data = get_processed_data()
             except Exception:
                 self.log.warn(f'Bad image file {item.href!r}')
                 continue

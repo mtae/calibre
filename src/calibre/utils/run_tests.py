@@ -923,6 +923,8 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.ai.venice.backend import find_tests
+
+        a(find_tests())
         from calibre.ai.structured import find_tests
 
         a(find_tests())

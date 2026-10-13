@@ -945,6 +945,9 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
     if ok('misc'):
+        from calibre.utils.date import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html.input import find_tests
 
         a(find_tests())

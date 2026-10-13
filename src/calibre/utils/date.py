@@ -500,3 +500,25 @@ def replace_months(datestr, clang):
         if tmp != datestr:
             break
     return tmp
+
+
+def find_tests():
+    import unittest
+
+    class TestFormatDate(unittest.TestCase):
+
+        def test_format_date(self):
+            from datetime import date
+
+            dt = datetime(2024, 3, 5, 14, 7, 9, tzinfo=utc_tz)
+            self.assertEqual(format_date(dt, 'yyyy-MM-dd hh:mm:ss', as_utc=True), '2024-03-05 14:07:09')
+            self.assertEqual(format_date(dt, None, as_utc=True), '05 Mar 2024')
+            self.assertEqual(format_date(UNDEFINED_DATE, 'yyyy'), '')
+            self.assertEqual(format_date(date(2024, 3, 5), 'd/M/yy', as_utc=True), '5/3/24')
+            self.assertEqual(format_date(dt, 'iso', as_utc=True), isoformat(dt, as_utc=True))
+            for fmt in ('s ss m mm h hh ap AP aP Ap', 'd dd ddd dddd M MM MMM MMMM yy yyyy', "h:mm ap 'at' yyyy", 'no codes: 1234', 'ddddd yyy MMMMM', ''):
+                pat = r'(s{1,2})|(m{1,2})|(h{1,2})|(ap)|(AP)|(aP)|(Ap)|(d{1,4}|M{1,4}|(?:yyyy|yy))'
+                expected = re.sub(pat, partial(fd_repl_func, dt, 'ap' in fmt.lower()), fmt or 'dd MMM yyyy')
+                self.assertEqual(format_date(dt, fmt, as_utc=True), expected, fmt)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestFormatDate)

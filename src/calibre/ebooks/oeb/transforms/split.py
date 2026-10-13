@@ -271,7 +271,9 @@ class FlowSplitter:
             if elem_id in all_page_break_ids:
                 ordered_ids[elem_id] = self.page_breaks[self.page_break_ids.index(elem_id)]
 
-        self.trees = [orig_tree]
+        # The last tree is split in place below. Work on a copy, as the item's data
+        # must not change if the file ends up as a single part.
+        self.trees = [copy.deepcopy(orig_tree)]
         # Finding the break and splitting must not cost O(size of the whole
         # remaining tree) per break, or books with many page breaks are
         # quadratic. The last tree holds everything after the previous break

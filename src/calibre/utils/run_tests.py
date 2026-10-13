@@ -861,6 +861,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.viewer.book_storage import find_tests
 
         a(find_tests())
+        from calibre.gui2.viewer.toc import find_tests
+
+        a(find_tests())
         from calibre.gui2.library.test_annotations import find_tests
 
         a(find_tests())
@@ -1058,6 +1061,12 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.gui2.preferences.adding import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tts.types import find_tests
+
+        a(find_tests())
+        from calibre.gui2.dialogs.opml import find_tests
 
         a(find_tests())
         if iswindows:

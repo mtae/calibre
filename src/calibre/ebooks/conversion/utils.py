@@ -23,20 +23,14 @@ class HeuristicProcessor:
         self.blanks_deleted = False
         self.blanks_between_paragraphs = False
         self.linereg = re.compile(r'(?<=<p).*?(?=</p>)', re.IGNORECASE | re.DOTALL)
-        # Whitespace before the first tag of these patterns is only matched from
-        # the start of a run of whitespace, (?<!\s)\s*+, and all whitespace is
-        # matched possessively. The tags that follow it start with <, so
-        # giving back whitespace never helps a match, and a match that starts
-        # inside a run of whitespace is the same as the one that starts at its
-        # start. Without this the engine retries every start position in a run
-        # of whitespace (quadratic) and, in the multi_blank patterns, every
-        # way of dividing the whitespace between the \s* that end one
-        # repetition and start the next (exponential). Matches and groups are
-        # unchanged, see the test in regex_safety_test.py.
+        # These patterns match whitespace possessively and start only at the start of a run of it,
+        # (?<!\s)\s*+: what follows is always a tag, which starts with <, so giving whitespace back
+        # never helps and a match that starts inside a run is the one that starts at its start.
+        # Retrying every start in a run is quadratic and every way of dividing whitespace between
+        # the repeats of the multi_blank patterns is exponential.
         self.blankreg = re.compile(r'(?<!\s)\s*+(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
         self.anyblank = re.compile(r'(?<!\s)\s*+(?P<openline><p[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
-        self.multi_blank = re.compile(
-            r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}(?!\s*<h\d)', re.IGNORECASE)
+        self.multi_blank = re.compile(r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}(?!\s*<h\d)', re.IGNORECASE)
         self.any_multi_blank = re.compile(r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}', re.IGNORECASE)
         self.line_open = (
             r'<(?P<outer>p|div)[^>]*>(\s*<(?P<inner1>font|span|[ibu])[^>]*>)?'
@@ -264,12 +258,10 @@ class HeuristicProcessor:
         n_lookahead_open = r'(?!\s*'
         n_lookahead_close = r')\s*'
 
-        # Whitespace repeats around the tags of the heading lines are possessive:
-        # each is followed by a < (or by whitespace that another repeat takes
-        # first), so giving whitespace back never produces a different match
-        # (the chap and title groups start and end at the same places), it only
-        # made the engine try every way of dividing a run of whitespace
-        # between neighbouring repeats.
+        # Whitespace and word repeats are possessive: each is followed by a < or by
+        # something that cannot match what it matched, so giving characters back
+        # never finds a different match, it only made the engine try every way of
+        # dividing a run of whitespace between neighbouring repeats.
         def possessive_ws(pattern):
             return pattern.replace(r'\s*', r'\s*+')
 
@@ -310,9 +302,9 @@ class HeuristicProcessor:
                 'chapter',
             ],
             [
-                # (?!([*#•=]+\s*)+) was true when the next character is not one of *#•=, but the
-                # whitespace before it gives characters back, so it only ever failed when no whitespace
-                # came before it: (?!(?<!\s)([*#•=])) says that without the nested repeats.
+                # (?!([*#•=]+\s*)+) only failed when no whitespace came before it, as the \s*
+                # before it could give back a character: (?!(?<!\s)([*#•=])) says that without
+                # the nested repeats.
                 r'<b[^>]*>\s*+(<span[^>]*>)?\s*+(?!(?<!\s)([*#•=]))(\s*+(?=[\d.\w#\-*\s]++<)([\d.\w#-*]++\s*+){1,5}\s*+)(?!\.)(</span>)?\s*+</b>',
                 True,
                 True,
@@ -569,12 +561,9 @@ class HeuristicProcessor:
         pre = re.compile(r'<pre>', re.IGNORECASE)
         if len(pre.findall(html)) >= 1:
             self.log.debug('Running Text Processing')
-            # Each match starts where the previous one ended (after a </pre>) or at the
-            # start of the document, so the lazy prefix of the old pattern is not needed.
-            # The atomic group keeps the first <pre> after that point: if no </pre> follows
-            # it, none follows a later <pre> either, so the backtracking this removes never
-            # found a match. The anchor stops every position inside an unclosed <pre> from
-            # scanning to the end of the document.
+            # A match starts at the start of the document or where the previous one ended. The atomic
+            # group keeps the first <pre> after that: if no </pre> follows it, none follows a later <pre>
+            # either. Without them every position of an unclosed <pre> scanned to the end of the document.
             outerhtml = re.compile(r'(?:\A|(?<=</pre>))(?>.*?(?<=<pre>))(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
             html = outerhtml.sub(self.txt_process, html)
             from calibre.ebooks.conversion.preprocess import convert_entities
@@ -616,15 +605,12 @@ class HeuristicProcessor:
         # Get rid of empty span, bold, font, em, & italics tags
         fmt_tags = 'font|[ibu]|em|strong'
         open_fmt_pat, close_fmt_pat = rf'<(?:{fmt_tags})(?:\s[^>]*+)?>', f'</(?:{fmt_tags})>'
-        # Each \s* here is followed by a tag, or ends the match, and tags start with <,
-        # so giving back whitespace never helps and \s*+ gives the same matches. A
-        # match starts at the start of a whitespace run (?<!\s), or at its end
-        # (?<=\s)(?!\s), where the previous match stopped after it consumed the run.
-        # Without these, every split of a run between the tags was tried, which is
-        # cubic on padded empty tags.
+        # Each \s* here is followed by a tag, which starts with <, or ends the match, so giving
+        # whitespace back never helps. Possessive, the engine no longer tries every way of
+        # dividing a run of whitespace between the \s* in a row, which is cubic.
         for i in range(2):
-            html = re.sub(r'(?:(?<!\s)|(?<=\s)(?!\s))\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
-            html = re.sub(rf'(?:(?<!\s)|(?<=\s)(?!\s))\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
+            html = re.sub(r'\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
+            html = re.sub(rf'\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
         # delete surrounding divs from empty paragraphs
         html = re.sub(r'<div[^>]*>\s*<p[^>]*>\s*</p>\s*</div>', '<p> </p>', html)
         # Empty heading tags
@@ -691,22 +677,22 @@ class HeuristicProcessor:
 
     def detect_whitespace(self, html):
         blanks_around_headings = re.compile(
-            r'(?P<initparas>(<(p|div)[^>]*>\s*</(p|div)>\s*){1,}\s*)?'
-            r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*(<(p|div)[^>]*>\s*</(p|div)>\s*){1,})?',
+            r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
+            r'(?P<content><h(?P<hnum>\d+)[^>]*>.*?</h(?P=hnum)>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
-        # Each \s* is followed by a tag (which starts with <) or by the content, so
-        # possessive \s*+ gives the same matches. The {1,} repeats stay greedy: with
-        # fewer repeats, the content can start at the last blank paragraph (an empty
-        # scene break), and that match must still be found.
+        # The \s* around the blank paragraphs are followed by a tag (which starts with <) or by the
+        # content, so possessive \s*+ gives the same matches. The {1,} repeats stay greedy: with fewer
+        # repeats the content can start at the last blank paragraph (an empty scene break), and that
+        # match must still be found.
         blanks_around_scene_breaks = re.compile(
             r'(?P<initparas>(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,}\s*+)?'
             r'(?P<content><p class="scenebreak"[^>]*+>.*?</p>)(?P<endparas>\s*+(<(p|div)[^>]*+>\s*+</(p|div)>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
         blanks_n_nopunct = re.compile(
-            r'(?P<initparas>(<p[^>]*>\s*</p>\s*){1,}\s*)?<p[^>]*>\s*(<(span|[ibu]|em|strong|font)[^>]*>\s*)*'
-            r'.{1,100}?[^\W](</(span|[ibu]|em|strong|font)>\s*)*</p>(?P<endparas>\s*(<p[^>]*>\s*</p>\s*){1,})?',
+            r'(?P<initparas>(<p[^>]*+>\s*+</p>\s*+){1,}\s*+)?<p[^>]*>\s*(<(span|[ibu]|em|strong|font)[^>]*>\s*)*'
+            r'.{1,100}?[^\W](</(span|[ibu]|em|strong|font)>\s*)*</p>(?P<endparas>\s*+(<p[^>]*+>\s*+</p>\s*+){1,})?',
             re.IGNORECASE | re.DOTALL,
         )
 
@@ -744,12 +730,10 @@ class HeuristicProcessor:
         return html
 
     def detect_soft_breaks(self, html):
-        # line_open ends with a greedy \s* and line_close starts with one, so in
-        # the first match found the content never starts or ends with
-        # whitespace. Saying so explicitly gives the same matches, but stops
-        # the regex engine from trying every way of splitting runs of
-        # whitespace between them, which takes cubic time on lines that do not
-        # match.
+        # line_open ends with a greedy \s* and line_close starts with one, so the
+        # content of the first match never starts or ends with whitespace. Saying so
+        # gives the same matches without trying every way of splitting a run of
+        # whitespace between them, which is cubic on lines that do not match.
         content = r'(?!\s)(?P<{}>(?:.*?\S)??)'
         line = '(?P<initline>' + self.line_open + content.format('init_content') + self.line_close + ')'
         line_two = (
@@ -792,10 +776,8 @@ class HeuristicProcessor:
             + self.common_in_text_beginnings
             + '|.*?'
             + self.common_in_text_endings
-            # The whitespace after a break character is possessive and there is
-            # no \s* between the break and line_close, which starts with one:
-            # nothing that follows can match whitespace that is given back, so
-            # the matches are the same without the backtracking over it
+            # \s*+ and no \s* before line_close, which starts with one: whitespace
+            # given back could not be matched by what follows anyway
             + r'<))(?P<break>((?P<break_char>((?!\s)\W))\s*+(?P=break_char)?){1,10})'
             + self.line_close
         )
@@ -1078,11 +1060,8 @@ class HeuristicProcessor:
         # If still no sections after unwrapping mark split points on lines with no punctuation
         if self.html_preprocess_sections < self.min_chapters and getattr(self.extra_opts, 'markup_chapter_headings', False):
             self.log.debug('Looking for more split points based on punctuation, currently have ' + str(self.html_preprocess_sections))
-            # (?!([\W]+\s*)+) is true when the next character is not \W, which is what (?!(\W)) says
-            # (the group stays so that the group numbers do not change) without trying every way of dividing a run of \W between the nested repeats. The
-            # whitespace and token repeats are possessive: each is followed by a character it
-            # cannot match (<, a token character, or the end of the token run), so giving
-            # characters back never produces a different match.
+            # (?!(\W)) is (?!([\W]+\s*)+) without the nested repeats. The group stays so that the
+            # group numbers do not change. The whitespace and word repeats are possessive, as above.
             chapdetect3 = re.compile(
                 r'<(?P<styles>(p|div)[^>]*)>\s*+(?P<section>(<span[^>]*>)?\s*+(?!(\W))'
                 r'(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+(<[ibu][^>]*>){0,2}\s*+(<span[^>]*>)?\s*+'
@@ -1136,7 +1115,424 @@ class HeuristicProcessor:
 
 
 def find_tests():
+    import time
     import unittest
+    from types import SimpleNamespace
+
+    SOFTBREAK = '<p class="softbreak" style="margin-top:.5em; page-break-before:avoid; text-align:center"> </p>'
+    SOFTBREAK_1EM = SOFTBREAK.replace('.5em', '1em')
+    SCENEBREAK = '<p class="scenebreak" style="text-align:center; text-indent:0%; margin-top:1em; margin-bottom:1em; page-break-before:avoid">'
+
+    class HeuristicRegexTest(unittest.TestCase):
+        def processor(self, narrow=False, **attrs):
+            hp = HeuristicProcessor()
+            for k, v in attrs.items():
+                setattr(hp, k, v)
+            if narrow:  # the patterns __call__() uses for pdftohtml output
+                hp.line_open = r'<(?P<outer>p)[^>]*>(\s*<[ibu][^>]*>)?\s*'
+                hp.line_close = r'\s*(</[ibu][^>]*>\s*)?</(?P=outer)>'
+            return hp
+
+        def assert_fast(self, func, *args):
+            start = time.process_time()
+            func(*args)
+            # Patterns that backtrack take seconds on these inputs, linear ones milliseconds
+            self.assertLess(time.process_time() - start, 0.5)
+
+        def test_soft_and_scene_breaks(self):
+            for narrow, opts, html, expected in (
+                (False, {}, '<p>He left.</p>\n<div> </div>\n<p>She stayed.</p>', f'<p>He left.</p>\n{SOFTBREAK}\n<p>She stayed.</p>'),
+                (
+                    False,
+                    {},
+                    '<p>  <span> He left. </span> </p>\n<div>\n</div>\n<p><i>She stayed!</i>  </p>',
+                    f'<p>  <span> He left. </span> </p>\n{SOFTBREAK}\n<p><i>She stayed!</i>  </p>',
+                ),
+                (False, {}, '<p>Chapter heading</p><div></div><p>Next.</p>', '<p>Chapter heading</p><div></div><p>Next.</p>'),
+                (
+                    False,
+                    {},
+                    '<p>One.</p>\n<p> </p>\n<p>Two.</p>\n<p class="softbreak"> </p><p>Three.</p>',
+                    f'<p>One.</p>\n{SOFTBREAK}\n<p>Two.</p>\n<p class="softbreak"> </p><p>Three.</p>',
+                ),
+                (
+                    False,
+                    {'blanks_between_paragraphs': True},
+                    '<p>One.</p>\n<p></p>\n<div> </div><p> </p>\n<p>Two.</p>\n<p></p><p></p><h2>Head</h2>',
+                    f'<p>One.</p>\n{SOFTBREAK_1EM}\n<p>Two.</p>\n<p></p><p></p><h2>Head</h2>',
+                ),
+                (True, {}, '<p><i> He left.</i></p>\n<div> </div>\n<p>She stayed.</p>', f'<p><i> He left.</i></p>\n{SOFTBREAK}\n<p>She stayed.</p>'),
+            ):
+                self.assertEqual(self.processor(narrow, **opts).detect_soft_breaks(html), expected, html)
+            for narrow, html, expected in (
+                (False, '<p>* * *</p>\n<p>Text here.</p>\n<p>  ***  </p>', f'{SCENEBREAK}* * *</p>\n<p>Text here.</p>\n{SCENEBREAK}***  </p>'),
+                (
+                    False,
+                    '<p> <span> ~ ~ ~ </span> </p>\n<div><b>---</b></div>\n<p>- - - - - -</p>',
+                    f'{SCENEBREAK}~ ~ ~</p>\n{SCENEBREAK}---</p>\n{SCENEBREAK}- - - - - -</p>',
+                ),
+                (
+                    False,
+                    '<p>Hello there.</p>\n<p>"Quoted."</p>\n<p>*</p>\n<p>**x</p>\n<p>&nbsp;</p>',
+                    f'<p>Hello there.</p>\n<p>"Quoted."</p>\n{SCENEBREAK}*</p>\n<p>**x</p>\n<p>&nbsp;</p>',
+                ),
+                (True, '<p><b> # # # </b></p>\n<p>Text.</p>', f'{SCENEBREAK}# # #</p>\n<p>Text.</p>'),
+            ):
+                self.assertEqual(self.processor(narrow).detect_scene_breaks(html), expected, html)
+            pad = ' ' * 350
+            self.assert_fast(self.processor().detect_soft_breaks, f'<p>{pad}x{pad}<b></p>')
+            self.assert_fast(self.processor().detect_scene_breaks, f'<p>*{pad}x;</p>')
+
+        def test_blank_paragraph_patterns(self):
+            hp = self.processor()
+            for html, expected in (
+                (
+                    (
+                        '<p>One.</p>\n'
+                        '\n'
+                        '  <p> </p>\n'
+                        '<p></p> \n'
+                        '<div> </div><p class="softbreak"> </p><p>\n'
+                        '</p>\n'
+                        '\n'
+                        '\n'
+                        '<div></div>\n'
+                        '<p>Two.</p>   <p></p>\n'
+                        '<div></div>\n'
+                        '<h2>Head</h2>'
+                    ),
+                    [
+                        [
+                            ((11, 23), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((23, 31), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((71, 79), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((105, 115), {'openline': '<p>', 'closeline': '</p>'}),
+                        ],
+                        [
+                            ((11, 23), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((23, 31), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((45, 71), {'openline': '<p class="softbreak">', 'closeline': '</p>'}),
+                            ((71, 79), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((105, 115), {'openline': '<p>', 'closeline': '</p>'}),
+                        ],
+                        [((11, 94), {})],
+                        [((11, 94), {})],
+                    ],
+                ),
+                (
+                    ('  <p></p>\n<p></p>  <div></div> <p></p><h3>x</h3>\n<p>y</p>  \n  <P STYLE="a"> </P>\n<p style="b"></p>\n<DIV> </DIV>\n'),
+                    [
+                        [
+                            ((0, 9), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((9, 17), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((30, 38), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((57, 80), {'openline': '<P STYLE="a">', 'closeline': '</P>'}),
+                            ((80, 98), {'openline': '<p style="b">', 'closeline': '</p>'}),
+                        ],
+                        [
+                            ((0, 9), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((9, 17), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((30, 38), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((57, 80), {'openline': '<P STYLE="a">', 'closeline': '</P>'}),
+                            ((80, 98), {'openline': '<p style="b">', 'closeline': '</p>'}),
+                        ],
+                        [((0, 31), {}), ((57, 112), {})],
+                        [((0, 38), {}), ((57, 112), {})],
+                    ],
+                ),
+                (
+                    '<p></p><p></p>',
+                    [
+                        [((0, 7), {'openline': '<p>', 'closeline': '</p>'}), ((7, 14), {'openline': '<p>', 'closeline': '</p>'})],
+                        [((0, 7), {'openline': '<p>', 'closeline': '</p>'}), ((7, 14), {'openline': '<p>', 'closeline': '</p>'})],
+                        [((0, 14), {})],
+                        [((0, 14), {})],
+                    ],
+                ),
+            ):
+                patterns = (hp.blankreg, hp.anyblank, hp.multi_blank, hp.any_multi_blank)
+                actual = [[(m.span(), m.groupdict()) for m in p.finditer(html)] for p in patterns]
+                self.assertEqual(actual, expected, html)
+            # exponential in the number of blank divs, quadratic in a run of spaces
+            divs = '<p></p>' + '\n<div></div>' * 22 + '\nx'
+            self.assert_fast(hp.multi_blank.findall, divs)
+            self.assert_fast(hp.any_multi_blank.findall, divs)
+            spaces = ' ' * 20000 + 'x'
+            for pattern in (hp.blankreg, hp.anyblank):
+                self.assert_fast(pattern.findall, spaces)
+
+        def test_chapter_patterns(self):
+            for blanks, html, expected in (
+                (
+                    False,
+                    ('<p>CHAPTER ONE</p>\n<p>Text here.</p>\n<p>CHAPTER TWO: The Title</p>\n<p>More text.</p>\n<p>Kapitel 3 - Der Anfang</p>\n<p>Last.</p>'),
+                    (
+                        '<h2>CHAPTER ONE</h2>\n'
+                        '<p>Text here.</p>\n'
+                        '<h2>CHAPTER TWO: The Title</h2>\n'
+                        '<p>More text.</p>\n'
+                        '<h2>Kapitel 3 - Der Anfang</h2>\n'
+                        '<p>Last.</p>'
+                    ),
+                ),
+                (
+                    False,
+                    (
+                        '<p>Chapter 1</p>\n'
+                        '<p>The Beginning</p>\n'
+                        '<p>Text.</p>\n'
+                        '<p>Chapter 2</p>\n'
+                        '<p>The Second Part</p>\n'
+                        '<p>Text.</p>\n'
+                        '<p>Chapter 3</p>\n'
+                        '<p>Third</p>'
+                    ),
+                    (
+                        '<h2 title="Chapter 1, The Beginning">Chapter 1</h2>\n'
+                        '<h3 class="sigilNotInTOC">The Beginning</h3>\n'
+                        '\n'
+                        '<p>Text.</p>\n'
+                        '<h2 title="Chapter 2, The Second Part">Chapter 2</h2>\n'
+                        '<h3 class="sigilNotInTOC">The Second Part</h3>\n'
+                        '\n'
+                        '<p>Text.</p>\n'
+                        '<h2 title="Chapter 3, Third">Chapter 3</h2>\n'
+                        '<h3 class="sigilNotInTOC">Third</h3>\n'
+                    ),
+                ),
+                (
+                    False,
+                    (
+                        '<p><b>The First Day</b></p>\n'
+                        '<p>Text.</p>\n'
+                        '<p><b>* * *</b></p>\n'
+                        '<p><b> The Second  Day </b></p>\n'
+                        '<p>Text.</p>\n'
+                        '<p><b><span>Third Day</span></b></p>'
+                    ),
+                    (
+                        '<h2><b>The First Day</b></h2>\n'
+                        '<p>Text.</p>\n'
+                        '<p><b>* * *</b></p>\n'
+                        '<h2><b> The Second  Day </b></h2>\n'
+                        '<p>Text.</p>\n'
+                        '<h2><b><span>Third Day</span></b></h2>\n'
+                    ),
+                ),
+                (
+                    False,
+                    ('<p>1. The Start</p>\n<p>text.</p>\n<p>2: Next one</p>\n<p>text.</p>\n<p>3. More</p>\n<p>4 Four Little Words</p>'),
+                    (
+                        '<h2>1. The Start</h2>\n'
+                        '<p>text.</p>\n'
+                        '<h2>2: Next one</h2>\n'
+                        '<p>text.</p>\n'
+                        '<h2 title="3\\. More, 4 Four Little Words">3. More</h2>\n'
+                        '<h3 class="sigilNotInTOC">4 Four Little Words</h3>\n'
+                    ),
+                ),
+                (
+                    False,
+                    ('<p>P A R T  I</p>\n<p>text</p>\n<p>P A R T  II  Two</p>\n<p>text</p>\n<p>P A R T III</p>'),
+                    (
+                        '<h2 title="P A R T I, text">P A R T  I</h2>\n'
+                        '<h3 class="sigilNotInTOC">text</h3>\n'
+                        '\n'
+                        '<h2 title="P A R T II Two, text">P A R T  II  Two</h2>\n'
+                        '<h3 class="sigilNotInTOC">text</h3>\n'
+                        '\n'
+                        '<p>P A R T III</p>'
+                    ),
+                ),
+                (
+                    False,
+                    ('<div><span>Prologue</span></div>\n<div>text.</div>\n<p><i>Epilogue</i></p>\n<p>Dedication To Us</p>\n<p>Part 2: The Rest</p>'),
+                    ('<h2>Prologue</h2>\n<div>text.</div>\n<p><i>Epilogue</i></p>\n<p>Dedication To Us</p>\n<h2>Part 2: The Rest</h2>\n'),
+                ),
+                (
+                    True,
+                    (
+                        '<p>CHAPTER ONE</p>\n'
+                        '<p></p>\n'
+                        '<p>Intro.</p>\n'
+                        '<p></p>\n'
+                        '<p>CHAPTER TWO</p>\n'
+                        '<p></p>\n'
+                        '<p></p>\n'
+                        '<p>Intro.</p>\n'
+                        '<p>Chapter 3</p>\n'
+                        '<p></p>\n'
+                        '<p>Title</p>'
+                    ),
+                    (
+                        '<h2>CHAPTER ONE</h2>\n'
+                        '<p>Intro.</p>\n'
+                        '<p></p>\n'
+                        '<h2>CHAPTER TWO</h2>\n'
+                        '<p>Intro.</p>\n'
+                        '<h2 title="Chapter 3, Title">Chapter 3</h2>\n'
+                        '<h3 class="sigilNotInTOC">Title</h3>\n'
+                    ),
+                ),
+                (
+                    False,
+                    ('<p>ONE</p>\n<p>text.</p>\n<p>TWO THREE</p>\n<p>text.</p>\n<p>FOUR</p>\n<p>IV</p>\n<p>text</p>'),
+                    ('<h2>ONE</h2>\n\n<p>text.</p>\n<h2>TWO THREE</h2>\n\n<p>text.</p>\n<h2>FOUR</h2>\n\n<h2>IV</h2>\n\n<p>text</p>'),
+                ),
+            ):
+                hp = self.processor(min_chapters=3)
+                self.assertEqual(hp.markup_chapters(html, 0, blanks), expected, html)
+            filler = '<p>' + 'Some filler text goes here. ' * 10 + '</p>\n'
+            for section, expected in (
+                ('<p>Some heading words</p>', ['<p style="page-break-before:always">Some heading words</p>']),
+                ('<p><span><i>Some heading words</i></span></p>', []),
+                ('<div>Some heading words</div>', ['<div style="page-break-before:always">Some heading words</div>']),
+                ('<p>  !! punctuated first</p>', []),
+                ('<p><b> bold first</b></p>', []),
+                ('<p>Some heading, with punctuation.</p>', []),
+            ):
+                hp = self.processor(extra_opts=SimpleNamespace(markup_chapter_headings=True))
+                lines = [x for x in hp(filler + section + '\n' + filler).split('\n') if 'page-break-before:always' in x]
+                self.assertEqual(lines, expected, section)
+            pad = ' ' * 60
+            self.assert_fast(self.processor().markup_chapters, f'<p>CHAPTER{pad}1 x{pad}<b></p>\n<p>text</p>', 0, False)
+            pad = ' ' * 16
+            self.assert_fast(self.processor(extra_opts=SimpleNamespace(markup_chapter_headings=True)), filler + f'<p>{pad}some heading{pad}<b>x</p>\n' + filler)
+
+        def test_markup_pre(self):
+            for attrs, html, expected in (
+                (
+                    {},
+                    ('<pre>Line one\n\nLine two &amp; more.</pre>\n<p>x</p>\n<PRE>Second block\nacross lines</pre>'),
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>Line one</p>\n'
+                        '<p>\xa0</p>\n'
+                        '<p>Line two &amp; more.</p>\n'
+                        '</body></html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>Second block</p>\n'
+                        '<p>across lines</p>\n'
+                        '</body></html>'
+                    ),
+                ),
+                (
+                    {},
+                    'Intro <pre>\nsingle\n</pre> outro',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>single</p>\n'
+                        '</body></html> outro'
+                    ),
+                ),
+                ({}, 'before<pre>unclosed text and <pre>more', 'before<pre>unclosed text and <pre>more'),
+                (
+                    {},
+                    '<pre>a</pre><pre>b</pre><p>tail <pre>never closed',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>a</p>\n'
+                        '</body></html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>b</p>\n'
+                        '</body></html><p>tail <pre>never closed'
+                    ),
+                ),
+                (
+                    {},
+                    '<pre>a\n\n  indented line\n</pre>\n\ntext<pre>\nb</pre>',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>a</p>\n'
+                        '<p>\xa0</p>\n'
+                        '<p>\xa0\xa0\xa0\xa0indented line</p>\n'
+                        '</body></html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>b</p>\n'
+                        '</body></html>'
+                    ),
+                ),
+                ({}, 'a\nb\n<p>c</p>\nd', 'a</p>\n<p>b</p>\n<p><p>c</p>\nd'),
+            ):
+                hp = self.processor(**attrs)
+                self.assertEqual(hp.markup_pre(html), expected, html)
+            self.assert_fast(self.processor().markup_pre, '<pre>x' * 250)
+
+        def test_cleanup_markup(self):
+            for attrs, html, expected in (
+                ({}, ('<p>a <span> </span> b</p>\n <span>\n<span> </span></span>\n<p>x <b> </b> <i><i></i></i> y <em>\n</em></p>'), '<p>a b</p> <p>x   y </p>'),
+                ({}, 'start  <font color="red"> </font>  <strong><b></b> </strong> text <u> </u>', 'start   text '),
+                ({}, '<p>nbsp\xa0here</p><p/><o:p> </o:p><st1:city>X</st1:city>', '<p>nbsp here</p><p> </p> X'),
+                ({}, '<span></span><span>x</span><b>bold</b><i> </i>', ' <span>x</span><b>bold</b> '),
+                ({}, '<span> <span> </span> <span></span> </span> after', ' after'),
+                ({}, ('<p><span>  </span></p><div><p> </p></div><h2> </h2><b> <b> </b> </b>  <b>x</b> <i> y </i>'), '<p> </p><p> </p>   <b>x</b> <i> y </i>'),
+            ):
+                hp = self.processor(**attrs)
+                self.assertEqual(hp.cleanup_markup(html), expected, html)
+            pad = ' ' * 700
+            self.assert_fast(self.processor().cleanup_markup, f'<b>{pad}<b>{pad}<i>{pad}x')
+
+        def test_detect_whitespace(self):
+            for attrs, html, expected in (
+                (
+                    {},
+                    '<p>Text.</p>\n<p></p>\n<p> </p>\n<h2>Head</h2>\n<p></p>\n<p>More.</p>',
+                    '<p>Text.</p>\n\n\n<h2 style="margin-top:2em;margin-bottom:1em;">Head</h2><p>More.</p>',
+                ),
+                (
+                    {},
+                    ('<p>One.</p>\n<p></p>\n<p></p>\n<p class="scenebreak" style="text-align:center">***</p>\n<p></p>\n<p>After.</p>'),
+                    '<p>One.</p>\n<p class="scenebreak" style="text-align:center">***</p><p>After.</p>',
+                ),
+                (
+                    {},
+                    '<div></div> <div> </div>\n<p class="scenebreak" style="text-align:center">* * *</p>',
+                    '<p class="scenebreak" style="text-align:center">* * *</p>',
+                ),
+                (
+                    {},
+                    ('<p class="scenebreak" style="text-align:center">~</p>\n<div>\n</div>\n<p></p>\n<p>Next.</p>'),
+                    '<p class="scenebreak" style="text-align:center">~</p><p>Next.</p>',
+                ),
+                (
+                    {},
+                    '<p>x</p><p></p><p class="scenebreak" style="text-align:center">-</p>\n\n<p>y</p>',
+                    '<p>x</p><p class="scenebreak" style="text-align:center">-</p>\n\n<p>y</p>',
+                ),
+                (
+                    {},
+                    # An empty scene break between blank paragraphs is still found, as the content
+                    '<div>x</div>\n<p></p>\n<p class="scenebreak" style="text-align:center"></p>\n<p></p>\n<div>y</div>',
+                    '<div>x</div>\n<p class="scenebreak" style="text-align:center"></p><div>y</div>',
+                ),
+                (
+                    {},
+                    ('<p></p>\n<p></p>\n<p>Title line</p>\n<p></p>\n<p>Body text, with punctuation.</p>\n<p></p>'),
+                    (
+                        '\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p>Title line</p>\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p>Body text, with punctuation.</p>\n'
+                        '<p></p>'
+                    ),
+                ),
+                (
+                    {'html_preprocess_sections': 3},
+                    '<p></p>\n<p>Before the first heading</p>\n<p></p><h2>First</h2>\n<p>Text.</p>',
+                    (
+                        '\n'
+                        '<p class="whitespace" style="text-align:center; margin-top:0em; margin-bottom:0em"> </p>\n'
+                        '<p>Before the first heading</p>\n'
+                        '\n'
+                        '\n'
+                        '<h2 style="margin-top:1em;">First</h2>\n'
+                        '<p>Text.</p>'
+                    ),
+                ),
+            ):
+                hp = self.processor(**attrs)
+                self.assertEqual(hp.detect_whitespace(html), expected, html)
+            pad = ' ' * 1000
+            self.assert_fast(self.processor().detect_whitespace, ('<p>' + pad + '</p>' + pad) * 2 + 'text')
 
     class HeuristicProcessorTest(unittest.TestCase):
         def test_fix_nbsp_indents_keeps_attributes(self):
@@ -1155,4 +1551,6 @@ def find_tests():
                     self.assertIn(x, result, html)
                 self.assertTrue(result.endswith('>Hello</p>'), html)
 
-    return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicProcessorTest)
+    ans = unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)
+    ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicProcessorTest))
+    return ans

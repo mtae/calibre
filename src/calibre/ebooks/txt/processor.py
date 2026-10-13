@@ -277,7 +277,11 @@ def detect_paragraph_type(txt):
     """
     txt = txt.replace('\r\n', '\n')
     txt = txt.replace('\r', '\n')
-    txt_line_count = len(re.findall(r'(?mu)^\s*.+$', txt))
+    # Both patterns below need a character that is not a line break, so every start in the line breaks at the
+    # end of the text fails after scanning to the end of it, which is quadratic. The counts are the same
+    # without them: $ matches at the end of the text.
+    stripped = txt.rstrip('\n')
+    txt_line_count = len(re.findall(r'(?mu)^\s*.+$', stripped))
 
     # Check for hard line breaks - true if 55% of the doc breaks in the same region
     docanalysis = DocAnalysis('txt', txt)
@@ -285,7 +289,7 @@ def detect_paragraph_type(txt):
 
     if hardbreaks:
         # Determine print percentage
-        tab_line_count = len(re.findall(r'(?mu)^(\t|\s{2,}).+$', txt))
+        tab_line_count = len(re.findall(r'(?mu)^(\t|\s{2,}).+$', stripped))
         print_percent = tab_line_count / float(txt_line_count)
 
         # Determine block percentage
@@ -384,3 +388,84 @@ def get_images_from_polyglot_text(txt: str, base_dir: str = '', file_ext: str = 
             path = img.get('src') or ''
             check_path(path)
     return images
+
+
+def find_tests():
+    import time
+    import unittest
+
+    from calibre.ebooks.conversion.preprocess import DocAnalysis
+
+    class TXTProcessorTest(unittest.TestCase):
+        def assert_fast(self, func, *args):
+            start = time.process_time()
+            func(*args)
+            # Patterns that scan to the end of the text from every character take seconds on these inputs
+            self.assertLess(time.process_time() - start, 0.5)
+
+        def test_line_counting(self):
+            for txt, expected in (
+                ('Para one.\n\nPara two.\n\n\n\n', 'single'),
+                ('single line only', 'single'),
+                ('\n'.join(f'Hard wrapped line {i} of the sample text.' for i in range(30)), 'unformatted'),
+                ('\n\n'.join('\n'.join(f'Hard wrapped line {i} of the sample text {j}.' for i in range(5)) for j in range(8)), 'block'),
+                (
+                    '\n'.join('\n'.join(('    ' if i == 0 else '') + f'Hard wrapped line {i} of the sample text {j}.' for i in range(5)) for j in range(8)),
+                    'print',
+                ),
+                (
+                    '\n\n'.join('\n'.join(('\t' if i == 0 else '') + f'Hard wrapped line {i} of the sample text {j}.' for i in range(5)) for j in range(8))
+                    + '\n\n\n\n',
+                    'block',
+                ),
+                (
+                    '\n'.join('\n'.join(('  ' if i == 0 else '') + f'Hard wrapped line {i} of the sample text {j}.' for i in range(5)) for j in range(8))
+                    + '\n   \n \n\n',
+                    'print',
+                ),
+            ):
+                self.assertEqual(detect_paragraph_type(txt), expected, txt)
+            for txt, expected in (
+                (
+                    'first line\nsecond line\n\n* item a\n* item b\n\nlast line\nwith a break\nand another\n',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '\t<p>first line<br />second line</p>\n'
+                        '\n'
+                        '\t<ul>\n'
+                        '\t\t<li>item a</li>\n'
+                        '\t\t<li>item b</li>\n'
+                        '\t</ul>\n'
+                        '\n'
+                        '\t<p>last line<br />with a break<br />and another</p>\n'
+                        '</body></html>'
+                    ),
+                ),
+                (
+                    'h1. Head\n\nline one\nline two <br>\nthree\n#  item\n',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '\t<h1>Head</h1>\n'
+                        '\n'
+                        '\t<p>line one<br />line two <br /><br />three\n'
+                        '\t<ol>\n'
+                        '\t\t<li> item</li>\n'
+                        '\t</ol></p>\n'
+                        '</body></html>'
+                    ),
+                ),
+            ):
+                self.assertEqual(convert_textile(txt), expected, txt)
+            for raw, expected in (
+                ('a\nb\nc\n', ['a\n', 'b\n', 'c\n']),
+                ('a\nb\nc', ['a\n', 'b\n']),
+                ('no line breaks at all', []),
+                ('\n\n', ['\n', '\n']),
+                ('x\n\ny\n  z', ['x\n', '\n', 'y\n']),
+            ):
+                self.assertEqual(DocAnalysis('txt', raw).lines, expected, raw)
+            self.assert_fast(detect_paragraph_type, 'text here.\n' + '\n' * 20000)
+            self.assert_fast(DocAnalysis, 'txt', 'a' * 20000)
+            self.assert_fast(convert_textile, 'first line\n' + 'x' * 8000)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TXTProcessorTest)

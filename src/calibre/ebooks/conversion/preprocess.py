@@ -94,7 +94,10 @@ class DocAnalysis:
         elif format == 'spanned_html':
             linere = re.compile(r'(?<=<span).*?(?=</span>)', re.DOTALL)
         elif format == 'txt':
-            linere = re.compile(r'.*?\n')
+            # A line ends with a line break, so the text after the last one is not a line. Searching it
+            # anyway tried .*?\n from each of its characters, which is quadratic.
+            raw = raw[: raw.rfind('\n') + 1]
+            linere = re.compile(r'[^\n]*\n')
         self.lines = linere.findall(raw)
 
     def line_length(self, percent):

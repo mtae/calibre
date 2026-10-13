@@ -111,7 +111,6 @@ def find_tests():
                 x = compress_doc(test)
                 self.assertEqual(py_compress_doc(test), x, f'py_compress_doc({test!r})')
                 self.assertEqual(decompress_doc(x), test)
-
         def test_palmdoc_compression_matches_reference(self):
             # The match finder in the C implementation must find the same
             # matches as the simple search in py_compress_doc, in particular

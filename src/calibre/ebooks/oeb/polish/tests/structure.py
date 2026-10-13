@@ -428,6 +428,21 @@ class Structure(BaseTest):
         self.assertFalse(any(e.can_be_skipped for e in parse_errors))
         self.assertEqual(remove_skipped(parse_errors, frozenset(e.rule_id for e in parse_errors)), parse_errors)
 
+    def test_check_encoding_declarations(self):
+        from calibre.ebooks.chardet import find_declared_encoding
+        from calibre.ebooks.oeb.polish.check.parsing import NonUTF8, check_encoding_declarations
+
+        def html(enc):
+            return f'<?xml version="1.0" encoding="{enc}"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body/></html>'
+
+        for raw in (html('iso-8859-1'), html('iso-8859-1').encode('ascii')):
+            self.assertEqual(find_declared_encoding(raw), 'iso-8859-1')
+        self.assertIsNone(find_declared_encoding('<html><body/></html>'))
+        c = self.create_epub([cmi('a.html', html('iso-8859-1')), cmi('b.html', html('utf-8'))])
+        errors = check_encoding_declarations('a.html', c)
+        self.assertEqual([type(e) for e in errors], [NonUTF8])
+        self.assertFalse(check_encoding_declarations('b.html', c))
+
     def test_invalid_id_fix(self):
         from calibre.ebooks.oeb.polish.check.main import fix_errors
         from calibre.ebooks.oeb.polish.check.parsing import InvalidId, check_ids, make_valid_id

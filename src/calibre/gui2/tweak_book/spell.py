@@ -253,6 +253,8 @@ class AddDictionary(QDialog):  # {{{
 
     def _process_online_download(self):
         data = self.combobox_online.currentData()
+        if data is None:
+            return error_dialog(self, _('No language selected'), _('You must choose a language to download'), show=True)
         nick = 'online-' + data['name']
         directory = data['directory']
         if nick in {d.name for d in custom_dictionaries()}:
@@ -1018,13 +1020,14 @@ class WordsModel(QAbstractTableModel):
             self.words[new_key] = self.words[w]
             self.spell_map[new_key] = dictionaries.recognized(*new_key)
             self.update_word(new_key)
-            self.update_counts()
         row = self.row_for_word(w)
         if row > -1:
             self.beginRemoveRows(QModelIndex(), row, row)
             del self.items[row]
             self.endRemoveRows()
         self.words.pop(w, None)
+        self.spell_map.pop(w, None)
+        self.update_counts()
         return new_key
 
     def update_word(self, w):
@@ -1035,10 +1038,12 @@ class WordsModel(QAbstractTableModel):
             del self.items[row]
             self.endRemoveRows()
         elif not should_be_filtered and row == -1:
-            self.items.append(w)
-            self.do_sort()
-            row = self.row_for_word(w)
+            items = self.items + [w]
+            col, reverse = self.sort_on
+            items.sort(key=self.sort_key(col), reverse=reverse)
+            row = items.index(w)
             self.beginInsertRows(QModelIndex(), row, row)
+            self.items = items
             self.endInsertRows()
         self.dataChanged.emit(self.index(row, 3), self.index(row, 3))
 
@@ -1857,6 +1862,46 @@ def find_next_error(current_editor, current_editor_name, gui_parent, show_editor
 
 
 # }}}
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class TestWordsModel(unittest.TestCase):
+        def setUp(self):
+            self.enterContext(patch(f'{__name__}.dictionaries', SimpleNamespace(recognized=lambda word, locale: False)))
+            self.locale = DictionaryLocale('en', 'US')
+
+        def model(self, *words):
+            keys = [(w, self.locale) for w in words]
+            m = WordsModel()
+            m.set_data({k: [SimpleNamespace(file_name='a.html', sourceline=1, replace=lambda new_word: None)] for k in keys}, dict.fromkeys(keys, False))
+            return m
+
+        def test_replace_word_counts(self):
+            m = self.model('aaa', 'bbb')
+            self.assertEqual(m.counts, (2, 2))
+            m.replace_word(('aaa', self.locale), 'ccc')
+            self.assertNotIn(('aaa', self.locale), m.spell_map)
+            self.assertEqual(m.counts, (2, 2))
+            m.replace_word(('ccc', self.locale), 'bbb')  # merged into an existing word
+            self.assertNotIn(('ccc', self.locale), m.spell_map)
+            self.assertEqual(m.counts, (1, 1))
+
+        def test_update_word_notifies_before_insert(self):
+            m = self.model('aaa', 'ccc')
+            new = ('bbb', self.locale)
+            m.words[new], m.spell_map[new] = m.words[('aaa', self.locale)], False
+            seen = []
+            m.rowsAboutToBeInserted.connect(lambda parent, first, last: seen.append((first, len(m.items))))
+            m.update_word(new)
+            self.assertEqual(seen, [(1, 2)])
+            self.assertEqual(m.row_for_word(new), 1)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestWordsModel)
+
 
 if __name__ == '__main__':
     from calibre.gui2 import Application

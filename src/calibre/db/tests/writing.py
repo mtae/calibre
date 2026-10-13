@@ -458,6 +458,44 @@ class WritingTest(BaseTest):
 
     # }}}
 
+    def test_restore_notes_in_transaction(self):  # {{{
+        "Test that restoring a library restores all the notes in one transaction, not with a commit for each note"
+        from calibre.db.backend import DB
+        from calibre.db.restore import Restore
+
+        cl = self.cloned_library
+        cache = self.init_cache(cl)
+        notes = {aid: f'a note for the author {aid}' for aid in sorted(cache.all_field_ids('authors'))[:2]}
+        for aid, doc in notes.items():
+            cache.set_notes_for('authors', aid, doc)
+        names = {aid: cache.get_item_name('authors', aid) for aid in notes}
+        cache.dump_metadata()
+        cache.close()
+        commits = []
+        orig = DB.restore_notes
+
+        def restore_notes(db, *args):
+            db.conn.set_commit_hook(lambda: (commits.append(1), False)[1])
+            try:
+                return orig(db, *args)
+            finally:
+                db.conn.set_commit_hook(None)
+
+        DB.restore_notes = restore_notes
+        try:
+            restorer = Restore(cl)
+            restorer.start()
+            restorer.join(60)
+        finally:
+            DB.restore_notes = orig
+        self.assertFalse(restorer.is_alive())
+        cache = self.init_cache(cl)
+        authors = {cache.get_item_name('authors', aid): aid for aid in cache.all_field_ids('authors')}
+        for aid, doc in notes.items():
+            self.assertEqual(cache.notes_for('authors', authors[names[aid]]), doc)
+        self.assertEqual(len(commits), 0, 'restoring the notes commits for every note')
+    # }}}
+
     def test_set_cover(self):  # {{{
         "Test setting of cover"
         cache = self.init_cache()

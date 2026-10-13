@@ -308,7 +308,8 @@ class Restore(Thread):
                 for field, lmap in self.link_maps.items():
                     with suppress(Exception):
                         db.set_link_map(field, {k: v[0] for k, v in lmap.items()})
-            self.notes_errors = db.backend.restore_notes(self.progress_callback)
+            with db.new_api:  # One commit for all the notes, not one for each
+                self.notes_errors = db.backend.restore_notes(self.progress_callback)
 
     def replace_db(self):
         dbpath = os.path.join(self.src_library_path, 'metadata.db')

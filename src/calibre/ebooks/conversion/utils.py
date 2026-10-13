@@ -23,10 +23,15 @@ class HeuristicProcessor:
         self.blanks_deleted = False
         self.blanks_between_paragraphs = False
         self.linereg = re.compile(r'(?<=<p).*?(?=</p>)', re.IGNORECASE | re.DOTALL)
-        self.blankreg = re.compile(r'\s*(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*(?P<closeline></p>)', re.IGNORECASE)
-        self.anyblank = re.compile(r'\s*(?P<openline><p[^>]*>)\s*(?P<closeline></p>)', re.IGNORECASE)
-        self.multi_blank = re.compile(r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}(?!\s*<h\d)', re.IGNORECASE)
-        self.any_multi_blank = re.compile(r'(\s*<p[^>]*>\s*</p>(\s*<div[^>]*>\s*</div>\s*)*){2,}', re.IGNORECASE)
+        # These patterns match whitespace possessively and start only at the start of a run of it,
+        # (?<!\s)\s*+: what follows is always a tag, which starts with <, so giving whitespace back
+        # never helps and a match that starts inside a run is the one that starts at its start.
+        # Retrying every start in a run is quadratic and every way of dividing whitespace between
+        # the repeats of the multi_blank patterns is exponential.
+        self.blankreg = re.compile(r'(?<!\s)\s*+(?P<openline><p(?!\sclass=\"(softbreak|whitespace)\")[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
+        self.anyblank = re.compile(r'(?<!\s)\s*+(?P<openline><p[^>]*>)\s*+(?P<closeline></p>)', re.IGNORECASE)
+        self.multi_blank = re.compile(r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}(?!\s*<h\d)', re.IGNORECASE)
+        self.any_multi_blank = re.compile(r'(?<!\s)(\s*+<p[^>]*>\s*+</p>(\s*+<div[^>]*>\s*+</div>\s*+)*){2,}', re.IGNORECASE)
         self.line_open = (
             r'<(?P<outer>p|div)[^>]*>(\s*<(?P<inner1>font|span|[ibu])[^>]*>)?'
             r'(\s*<(?P<inner2>font|span|[ibu])[^>]*>)?(\s*<(?P<inner3>font|span|[ibu])[^>]*>)?\s*'
@@ -1142,5 +1147,83 @@ def find_tests():
             pad = ' ' * 350
             self.assert_fast(self.processor().detect_soft_breaks, f'<p>{pad}x{pad}<b></p>')
             self.assert_fast(self.processor().detect_scene_breaks, f'<p>*{pad}x;</p>')
+
+        def test_blank_paragraph_patterns(self):
+            hp = self.processor()
+            for html, expected in (
+                (
+                    (
+                        '<p>One.</p>\n'
+                        '\n'
+                        '  <p> </p>\n'
+                        '<p></p> \n'
+                        '<div> </div><p class="softbreak"> </p><p>\n'
+                        '</p>\n'
+                        '\n'
+                        '\n'
+                        '<div></div>\n'
+                        '<p>Two.</p>   <p></p>\n'
+                        '<div></div>\n'
+                        '<h2>Head</h2>'
+                    ),
+                    [
+                        [
+                            ((11, 23), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((23, 31), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((71, 79), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((105, 115), {'openline': '<p>', 'closeline': '</p>'}),
+                        ],
+                        [
+                            ((11, 23), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((23, 31), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((45, 71), {'openline': '<p class="softbreak">', 'closeline': '</p>'}),
+                            ((71, 79), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((105, 115), {'openline': '<p>', 'closeline': '</p>'}),
+                        ],
+                        [((11, 94), {})],
+                        [((11, 94), {})],
+                    ],
+                ),
+                (
+                    ('  <p></p>\n<p></p>  <div></div> <p></p><h3>x</h3>\n<p>y</p>  \n  <P STYLE="a"> </P>\n<p style="b"></p>\n<DIV> </DIV>\n'),
+                    [
+                        [
+                            ((0, 9), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((9, 17), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((30, 38), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((57, 80), {'openline': '<P STYLE="a">', 'closeline': '</P>'}),
+                            ((80, 98), {'openline': '<p style="b">', 'closeline': '</p>'}),
+                        ],
+                        [
+                            ((0, 9), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((9, 17), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((30, 38), {'openline': '<p>', 'closeline': '</p>'}),
+                            ((57, 80), {'openline': '<P STYLE="a">', 'closeline': '</P>'}),
+                            ((80, 98), {'openline': '<p style="b">', 'closeline': '</p>'}),
+                        ],
+                        [((0, 31), {}), ((57, 112), {})],
+                        [((0, 38), {}), ((57, 112), {})],
+                    ],
+                ),
+                (
+                    '<p></p><p></p>',
+                    [
+                        [((0, 7), {'openline': '<p>', 'closeline': '</p>'}), ((7, 14), {'openline': '<p>', 'closeline': '</p>'})],
+                        [((0, 7), {'openline': '<p>', 'closeline': '</p>'}), ((7, 14), {'openline': '<p>', 'closeline': '</p>'})],
+                        [((0, 14), {})],
+                        [((0, 14), {})],
+                    ],
+                ),
+            ):
+                patterns = (hp.blankreg, hp.anyblank, hp.multi_blank, hp.any_multi_blank)
+                actual = [[(m.span(), m.groupdict()) for m in p.finditer(html)] for p in patterns]
+                self.assertEqual(actual, expected, html)
+            # exponential in the number of blank divs, quadratic in a run of spaces
+            divs = '<p></p>' + '\n<div></div>' * 22 + '\nx'
+            self.assert_fast(hp.multi_blank.findall, divs)
+            self.assert_fast(hp.any_multi_blank.findall, divs)
+            spaces = ' ' * 20000 + 'x'
+            for pattern in (hp.blankreg, hp.anyblank):
+                self.assert_fast(pattern.findall, spaces)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)

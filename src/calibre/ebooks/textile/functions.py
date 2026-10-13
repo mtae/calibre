@@ -479,10 +479,9 @@ class Textile:
         return re.compile(r'<(p)([^>]*?)>(.*)(</\1>)', re.S).sub(self.doBr, in_)
 
     def doBr(self, match):
-        # Only the end of a line matters here: (.+) takes the whole line, as . does not match a line break, so it can never
-        # give back characters and find a \n: possessive. A line that does not match fails the same way from each of
-        # its characters, so a match starts at the start of a line (the next one starts after the \n that ends a match).
-        # Without this a line that is long and does not match, such as the last one, is scanned from every character.
+        # (.+) takes the whole line (. does not match a line break), so it can never give back characters:
+        # possessive. A match starts at the start of a line, so a long line that does not match is not
+        # scanned from every character.
         if self.html_type == 'html':
             content = re.sub(r'(?<![^\n])(.++)(?:(?<!<br>)|(?<!<br />))\n(?![#*\s|])', '\\1<br>', match.group(3))
         else:

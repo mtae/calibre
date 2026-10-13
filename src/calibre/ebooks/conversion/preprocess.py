@@ -94,10 +94,8 @@ class DocAnalysis:
         elif format == 'spanned_html':
             linere = re.compile(r'(?<=<span).*?(?=</span>)', re.DOTALL)
         elif format == 'txt':
-            # A line ends with a line break, so the text after the last line break is not a line. Searching
-            # it anyway tries .*?\n from every one of its characters, each scanning to the end of the text
-            # and failing, which takes quadratic time in its length (a text without line breaks at all).
-            # The lines are the same: .*?\n is [^\n]*\n, a match never reaches over the last line break.
+            # A line ends with a line break, so the text after the last one is not a line. Searching it
+            # anyway tried .*?\n from each of its characters, which is quadratic.
             raw = raw[: raw.rfind('\n') + 1]
             linere = re.compile(r'[^\n]*\n')
         self.lines = linere.findall(raw)
@@ -277,22 +275,13 @@ class Dehyphenator:
         self.html = html
         self.format = format
         self.found_cache = {}
-        # [^\W\-] is the same as \w. All the patterns below are written so that the regex engine never tries a
-        # way of matching that cannot succeed, which makes the time they take linear in the size of the text
-        # instead of quadratic or cubic. They find exactly the same matches as the straightforward versions
-        # (the original patterns are in the history of this file, 7e05c67e and before), for these reasons:
-        #
-        # * A word is only tried from its first letter (start_of_word). Hyphens are not word characters, so
-        #   the letters of firstpart must reach all the way to the hyphen: starting from the second letter of
-        #   the word gives the same match minus its first letter. The one exception is the lookbehind that
-        #   wants `length` characters before firstpart: when the word starts too close to the start of the
-        #   line it is first satisfied some letters into the word, and that is where the match starts.
-        #   start_of_word accepts exactly that position: preceded by `length` characters that are not line
-        #   breaks, and not preceded by a letter, or preceded by one but not by length + 1 characters.
-        # * Possessive quantifiers (*+, ++) are used for runs that are followed by something that cannot
-        #   match any of the characters of the run (letters before the hyphen, whitespace before a < or a
-        #   letter, [^>]* before the >). Giving characters back could never lead to a match, but the engine
-        #   would try it, for every split of the whitespace between neighbouring \s* when there are several.
+        # [^\W\-] is \w. The patterns below find the same matches as the earlier versions without ever trying a
+        # way of matching that cannot succeed, which made them quadratic or cubic in the size of the text:
+        # * A word is tried only from its first letter (start_of_word), as hyphens are not word characters and
+        #   a start in the middle gives the same match minus its first letters. The exception is the lookbehind
+        #   that wants `length` characters before the word: a word closer than that to the start of the line
+        #   first satisfies it some letters in, and that is where its match starts.
+        # * Runs followed by something that cannot match their characters are possessive.
         start_of_word = r'(?<=.{%i})(?:(?<!\w)|(?<!.{%i}))' % (length, length + 1)  # noqa: UP031
         inside_tag = None
         if format == 'html':
@@ -309,15 +298,11 @@ class Dehyphenator:
         elif format == 'txt':
             intextmatch = re.compile(start_of_word + r'(?P<firstpart>\w++)(-|‐)( |\t)*+(?P<wraptags>(\n( |\t)*+)++)(?P<secondpart>[\w\d]+)')
         elif format == 'individual_words':
-            # The original pattern ended with (?![^<]*?>), which is only true if the first of < and > after the
-            # word is not a >, that is if the word is not inside a tag. It scans up to that character, so on a
-            # text with few tags it was run over the rest of the text for every hyphen. The same test is done
-            # in dehyphenate_if_not_in_tag with a binary search in the positions of < and >, which are
-            # collected once. All the characters of a match are in one run without < and >, so the test gives
-            # the same answer for every way of shortening the match, and a match that fails it makes the
-            # engine try other starts in the same run, which fail the same way.
+            # The test (?![^<]*?>) that the word is not inside a tag scanned to the next < or > for every
+            # hyphen. It is now done with a binary search in the positions of < and > collected once. A match is
+            # in one run without them, so shortening it does not change the answer.
             intextmatch = re.compile(r'(?<!\w)(?!<)(?P<firstpart>\w++)(-|‐)\s*+(?P<secondpart>\w+)', re.UNICODE)
-            angle_brackets = [m.start() for m in re.finditer('[<>]', html)]
+            angle_brackets = [m.start() for m in re.finditer(r'[<>]', html)]
 
             def inside_tag(pos, text=html):
                 i = bisect_left(angle_brackets, pos)
@@ -698,3 +683,90 @@ class HTMLPreProcessor:
                     html = html.replace(char, asciichar)
 
         return html
+
+
+def find_tests():
+    import time
+    import unittest
+
+    from calibre.utils.logging import Log
+
+    class DehyphenatorTest(unittest.TestCase):
+        def dehyphenate(self, html, format, length=1):
+            log = Log()
+            log.filter_level = log.ERROR
+            return Dehyphenator(0, log)(html, format, length)
+
+        def test_dehyphenator(self):
+            for format, length, html, expected in (
+                (
+                    'html',
+                    1,
+                    (
+                        'The inter-</p>\n'
+                        '<p>national treaty. The international law. Some con-\n'
+                        '</p>\n'
+                        '<p><span>tinued</span> text and continued work, a well-</p><p>known thing.'
+                    ),
+                    ('The international treaty. The international law. Some continued</span> text and continued work, a well-known thing.'),
+                ),
+                (
+                    'html',
+                    5,
+                    (
+                        'The inter-</p>\n'
+                        '<p>national treaty. The international law. Some con-\n'
+                        '</p>\n'
+                        '<p><span>tinued</span> text and continued work, a well-</p><p>known thing.'
+                    ),
+                    ('The international treaty. The international law. Some continued</span> text and continued work, a well-known thing.'),
+                ),
+                (
+                    'pdf',
+                    1,
+                    ('The inter-\n<p>national treaty. International. A re-\n</p><p>peat of repeat. Un-\n</i><p><i>known</i> and unknown.'),
+                    ('The international treaty. International. A re-\n</p><p>peat of repeat. Unknown</i> and unknown.'),
+                ),
+                (
+                    'txt',
+                    1,
+                    ('The inter-\n  national treaty and international law.\nA re-\npeat of repeat, a self-\nevident truth. Un- \n\n known and unknown.'),
+                    ('The international treaty and international law.\nA repeat of repeat, a self-evident truth. Unknown and unknown.'),
+                ),
+                (
+                    'txt',
+                    10,
+                    ('ab inter-\nnational treaty; international. Long enough line here, con-\ntinued and continued.'),
+                    ('ab inter-\nnational treaty; international. Long enough line here, continued and continued.'),
+                ),
+                (
+                    'individual_words',
+                    1,
+                    ('inter-national treaty and international; re-peat of repeat; <a href="x-y">z-w</a> in-side; well-known; self- evident'),
+                    ('international treaty and international; re-peat of repeat; <a href="x-y">z-w</a> in-side; well-known; self-evident'),
+                ),
+                (
+                    'html_cleanup',
+                    1,
+                    ('inter-</p><p>national treaty; international; well-</p><p>known; known. Re-</span> <span>peat of repeat.'),
+                    'international treaty; international; well—</p><p>known; known. Repeat of repeat.',
+                ),
+                (
+                    'txt_cleanup',
+                    1,
+                    'inter- national treaty international; self- evident; a - b; re- peat of repeat',
+                    'international treaty international; self— evident; a - b; repeat of repeat',
+                ),
+            ):
+                self.assertEqual(self.dehyphenate(html, format, length), expected, html)
+            # Patterns that backtrack take seconds on these, linear ones milliseconds
+            pad = ' ' * 300
+            for html, format in (
+                (f'word-{pad}</p>{pad}</p>{pad}<p>{pad}<i>{pad}!', 'html'),
+                ('ab-cd ' * 8000, 'individual_words'),
+            ):
+                start = time.process_time()
+                self.dehyphenate(html, format)
+                self.assertLess(time.process_time() - start, 0.5, format)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(DehyphenatorTest)

@@ -6,6 +6,7 @@ Test the CLI of the calibre database management tool
 """
 
 import csv
+import os
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -99,9 +100,37 @@ class ListCategoriesTest(unittest.TestCase):
         self.assertEqual(lines[1].split(), ['Authors', '3', '10'])
 
 
+class ExportTest(unittest.TestCase):
+    def test_export_same_title_and_author(self):
+        from calibre.ebooks.metadata.book.base import Metadata
+        from calibre.library.save_to_disk import do_save_book_to_disk, sanitize_args
+        from calibre.ptempfile import TemporaryDirectory
+
+        class DB:
+            def copy_format_to(self, book_id, fmt, path):
+                with open(path, 'w') as f:
+                    f.write(str(book_id))
+
+        with TemporaryDirectory() as tdir:
+            dest, opts, length = sanitize_args(tdir, None)
+            opts.save_cover = opts.write_opf = opts.update_metadata = False
+            used = set()
+            for book_id in (1, 2, 3):
+                mi = Metadata('Title', ['Author'])
+                do_save_book_to_disk(DB(), book_id, mi, {}, ['TXT'], dest, opts, length, used_components=used)
+            found = {}
+            for dirpath, _dirs, files in os.walk(tdir):
+                for name in files:
+                    with open(os.path.join(dirpath, name)) as f:
+                        found[os.path.relpath(os.path.join(dirpath, name), tdir)] = f.read()
+            self.assertEqual(sorted(found.values()), ['1', '2', '3'])
+            self.assertEqual(len({os.path.dirname(x) for x in found}), 1)
+
+
 def find_tests():
     loader = unittest.defaultTestLoader
     return unittest.TestSuite((
         loader.loadTestsFromTestCase(PrintCheckLibraryResultsTest),
         loader.loadTestsFromTestCase(ListCategoriesTest),
+        loader.loadTestsFromTestCase(ExportTest),
     ))

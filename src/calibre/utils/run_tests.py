@@ -1010,6 +1010,12 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.utils.stop_gc import find_tests
 
         a(find_tests())
+        from calibre.utils.smtp import find_tests
+
+        a(find_tests())
+        from calibre.library.catalogs.bibtex import find_tests
+
+        a(find_tests())
     if ok('dbcli'):
         from calibre.db.cli.tests import find_tests
 

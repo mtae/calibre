@@ -115,15 +115,7 @@ cpalmdoc_decompress(PyObject *self, PyObject *args) {
 #define MIN_MATCH_LEN 3
 #define MAX_MATCH_LEN 10
 #define MAX_MATCH_DIST 2047
-<<<<<<< HEAD
 #define HASH_BITS 16
-=======
-// The table is cleared on every call and PalmDOC records are usually 4096
-// bytes, so it is kept small. Collisions only lengthen the chains, since
-// every candidate is compared byte by byte, so the size does not change the
-// output.
-#define HASH_BITS 12
->>>>>>> refs/rewritten/perf-palmdoc-compress-matcher
 #define HASH_SIZE (1 << HASH_BITS)
 
 static inline unsigned int
@@ -182,9 +174,11 @@ cpalmdoc_do_compress(buffer *b, char *output, Py_ssize_t output_len) {
     temp.data = (Byte *)PyMem_Malloc(sizeof(Byte) * 8);
     temp.len = 0;
     if (temp.data == NULL) return 0;
-    hash_head = (int32_t *)PyMem_Malloc(sizeof(int32_t) * (HASH_SIZE + b->len));
+    // positions are stored as int32_t
+    hash_head = b->len > INT32_MAX ? NULL : (int32_t *)PyMem_Malloc(sizeof(int32_t) * (HASH_SIZE + b->len));
     if (hash_head == NULL) {
         PyMem_Free(temp.data);
+        PyErr_NoMemory();
         return 0;
     }
     hash_prev = hash_head + HASH_SIZE;

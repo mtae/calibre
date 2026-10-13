@@ -560,7 +560,10 @@ class HeuristicProcessor:
         pre = re.compile(r'<pre>', re.IGNORECASE)
         if len(pre.findall(html)) >= 1:
             self.log.debug('Running Text Processing')
-            outerhtml = re.compile(r'.*?(?<=<pre>)(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
+            # A match starts at the start of the document or where the previous one ended. The atomic
+            # group keeps the first <pre> after that: if no </pre> follows it, none follows a later <pre>
+            # either. Without them every position of an unclosed <pre> scanned to the end of the document.
+            outerhtml = re.compile(r'(?:\A|(?<=</pre>))(?>.*?(?<=<pre>))(?P<text>.*?)</pre>', re.IGNORECASE | re.DOTALL)
             html = outerhtml.sub(self.txt_process, html)
             from calibre.ebooks.conversion.preprocess import convert_entities
 
@@ -1384,5 +1387,61 @@ def find_tests():
             self.assert_fast(self.processor().markup_chapters, f'<p>CHAPTER{pad}1 x{pad}<b></p>\n<p>text</p>', 0, False)
             pad = ' ' * 16
             self.assert_fast(self.processor(extra_opts=SimpleNamespace(markup_chapter_headings=True)), filler + f'<p>{pad}some heading{pad}<b>x</p>\n' + filler)
+
+        def test_markup_pre(self):
+            for attrs, html, expected in (
+                (
+                    {},
+                    ('<pre>Line one\n\nLine two &amp; more.</pre>\n<p>x</p>\n<PRE>Second block\nacross lines</pre>'),
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>Line one</p>\n'
+                        '<p>\xa0</p>\n'
+                        '<p>Line two &amp; more.</p>\n'
+                        '</body></html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>Second block</p>\n'
+                        '<p>across lines</p>\n'
+                        '</body></html>'
+                    ),
+                ),
+                (
+                    {},
+                    'Intro <pre>\nsingle\n</pre> outro',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>single</p>\n'
+                        '</body></html> outro'
+                    ),
+                ),
+                ({}, 'before<pre>unclosed text and <pre>more', 'before<pre>unclosed text and <pre>more'),
+                (
+                    {},
+                    '<pre>a</pre><pre>b</pre><p>tail <pre>never closed',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>a</p>\n'
+                        '</body></html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>b</p>\n'
+                        '</body></html><p>tail <pre>never closed'
+                    ),
+                ),
+                (
+                    {},
+                    '<pre>a\n\n  indented line\n</pre>\n\ntext<pre>\nb</pre>',
+                    (
+                        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>a</p>\n'
+                        '<p>\xa0</p>\n'
+                        '<p>\xa0\xa0\xa0\xa0indented line</p>\n'
+                        '</body></html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title> </title></head><body>\n'
+                        '<p>b</p>\n'
+                        '</body></html>'
+                    ),
+                ),
+                ({}, 'a\nb\n<p>c</p>\nd', 'a</p>\n<p>b</p>\n<p><p>c</p>\nd'),
+            ):
+                hp = self.processor(**attrs)
+                self.assertEqual(hp.markup_pre(html), expected, html)
+            self.assert_fast(self.processor().markup_pre, '<pre>x' * 250)
 
     return unittest.defaultTestLoader.loadTestsFromTestCase(HeuristicRegexTest)

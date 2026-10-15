@@ -403,8 +403,6 @@ icu_Collator_contractions(icu_Collator *self, PyObject *args) {
     PyObject *ans = Py_None, *pbuf;
 
     if (self->contractions == NULL) {
-        self->contractions = uset_open(1, 0);
-        if (self->contractions == NULL) return PyErr_NoMemory();
         self->contractions = ucol_getTailoredSet(self->collator, &status);
     }
     status = U_ZERO_ERROR;

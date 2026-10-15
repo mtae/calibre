@@ -142,6 +142,11 @@ class TestHTTP(BaseTest):
         test('bytes=-5', (95, 99, 5))
         test('bytes=95-', (95, 99, 5))
         test('bytes=-200', (0, 99, 100))
+        # Overlapping ranges and too many ranges are ignored
+        test('bytes=0-99,0-0', None)
+        test('bytes=0-60,50-99', None)
+        test('bytes=' + ','.join(f'{i}-{i}' for i in range(16)), *((i, i, 1) for i in range(16)))
+        test('bytes=' + ','.join(f'{i}-{i}' for i in range(17)), None)
 
     # }}}
 
@@ -484,6 +489,13 @@ class TestHTTP(BaseTest):
                 self.ae(clen, len(data))
                 buf = BytesIO(data)
                 self.ae(parse_multipart_byterange(buf, r.getheader('Content-Type')), [(0, fdata[:26]), (26, fdata[26:51])])
+
+                # Too many ranges are ignored and the whole file is sent
+                conn.request('GET', '/test', headers={'Range': 'bytes=' + ','.join(f'{i}-{i}' for i in range(17))})
+                r = conn.getresponse()
+                self.ae(r.status, http.client.OK)
+                self.assertFalse(r.getheader('Content-Range'))
+                self.ae(r.read(), fdata)
 
                 # Test sending of larger file
                 start_time = monotonic()

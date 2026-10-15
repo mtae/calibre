@@ -120,6 +120,9 @@ def preferred_lang(val, get_translator_for_lang):  # {{{
 # }}}
 
 
+MAX_RANGES = 16
+
+
 def get_ranges(headervalue, content_length):  # {{{
     """Return a list of ranges from the Range header. If this function returns
     an empty list, it indicates no valid range was found."""
@@ -160,6 +163,9 @@ def get_ranges(headervalue, content_length):  # {{{
             else:
                 result.append(Range(content_length - stop, content_length - 1, stop))
 
+    if len(result) > MAX_RANGES or sum(r.size for r in result) > content_length:
+        # Too many or overlapping ranges, ignore the header and send the whole entity
+        return None
     return result
 
 

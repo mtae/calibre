@@ -695,7 +695,7 @@ The default pattern \[.+\]|\+ excludes tags of the form [tag], e.g., [Test book]
                   <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
                  </property>
                  <property name="buddy">
-                  <cstring>merge_source_field</cstring>
+                  <cstring>thumb_width</cstring>
                  </property>
                 </widget>
                </item>

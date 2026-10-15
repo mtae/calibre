@@ -539,7 +539,8 @@ class CSSFlattener:
 
         pseudo_classes = style.pseudo_classes(self.filter_css)
         if cssdict or pseudo_classes:
-            keep_classes = set()
+            # a dict, not a set: the order of the classes must not depend on the hash seed
+            keep_classes = {}
 
             if cssdict:
                 items = sorted(cssdict.items())
@@ -557,7 +558,7 @@ class CSSFlattener:
                     styles[css] = match
                     names[klass] += 1
                 node.attrib['class'] = match
-                keep_classes.add(match)
+                keep_classes[match] = None
 
             for psel, cssdict in pseudo_classes.items():
                 items = sorted(cssdict.items())
@@ -576,7 +577,7 @@ class CSSFlattener:
                     match = klass + str(names[klass] or '')
                     pstyles[css] = match
                     names[klass] += 1
-                keep_classes.add(match)
+                keep_classes[match] = None
                 node.attrib['class'] = ' '.join(keep_classes)
 
         elif 'class' in node.attrib:

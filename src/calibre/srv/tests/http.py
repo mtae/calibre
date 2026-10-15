@@ -251,6 +251,12 @@ class TestHTTP(BaseTest):
             self.ae(r.status, http.client.OK)
             self.ae(r.read().decode('utf-8'), '\n'.join(lines[:-2]))
 
+            # Credentials are not echoed back
+            lines = ['TRACE /xxx HTTP/1.1', 'Authorization: Basic abc', 'Cookie: a=b', 'Proxy-Authorization: Basic abc', 'Test: value', '', '']
+            r = raw_send(conn, ('\r\n'.join(lines)).encode('ascii'))
+            self.ae(r.status, http.client.OK)
+            self.ae(r.read().decode('utf-8'), 'TRACE /xxx HTTP/1.1\nTest: value')
+
             # Test POST with simple body
             conn.request('POST', '/test', 'body')
             r = conn.getresponse()

@@ -279,6 +279,19 @@ def test(return_tests=False):
             positions = next(iter(m(raw).values()))
             self.assertEqual(positions, (0, 1, 2))
 
+        def test_empty_items(self):
+            # Matcher() filters out empty items, but the C extension accepts
+            # them. ICU refuses to search in an empty string and the error used
+            # to be set without holding the GIL, crashing the interpreter.
+            for items in (['', 'abc'], ['abc', ''], ['a', '', 'ab', ''], ['', 'a', '']):
+                scores, positions = CScorer(items).m.calculate_scores('a')
+                for item, score, pos in zip(items, scores, positions):
+                    if item:
+                        self.assertGreater(score, 0, items)
+                        self.assertEqual(pos, (0,), items)
+                    else:
+                        self.assertEqual((score, pos), (0.0, (-1,)), items)
+
     if return_tests:
         return unittest.TestLoader().loadTestsFromTestCase(Test)
 

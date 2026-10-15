@@ -422,7 +422,7 @@ class Reader(FormatReader):
                                 x_off += w
                                 largest_height = max(largest_height, h)
                             y_off += largest_height
-                    with open(f'{uid}.jpg') as out:
+                    with open(f'{uid}.jpg', 'wb') as out:
                         out.write(canvas.export(compression_quality=70))
                     self.log.debug(f'Wrote composite image with uid {uid} to images/{uid}.jpg')
                 except Exception as e:
@@ -545,7 +545,7 @@ class Reader(FormatReader):
                         font_specifier_close = '</h2>'
                     # h3
                     elif specifier == 3:
-                        html += '<h13>'
+                        html += '<h3>'
                         font_specifier_close = '</h3>'
                     # h4
                     elif specifier == 4:
@@ -715,3 +715,17 @@ class Reader(FormatReader):
             html += '</p>'
 
         return html
+
+
+def find_tests():
+    import unittest
+
+    class Test(unittest.TestCase):
+        def test_font_specifier_headings(self):
+            reader = Reader.__new__(Reader)
+            reader.uid_text_secion_number = {}
+            for level in range(1, 7):
+                html = reader.process_phtml(b'\x00\x11' + bytes([level]) + b'text\x00\x11\x00')
+                self.assertIn(f'<h{level}>text</h{level}>', html)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

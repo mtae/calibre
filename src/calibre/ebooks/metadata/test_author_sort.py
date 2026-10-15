@@ -3,7 +3,7 @@
 
 import unittest
 
-from calibre.ebooks.metadata import author_to_author_sort, remove_bracketed_text
+from calibre.ebooks.metadata import author_to_author_sort, rating_to_stars, remove_bracketed_text, stars_to_rating
 from calibre.utils.config_base import Tweak, tweaks
 
 
@@ -112,7 +112,17 @@ class TestAuthorToAuthorSort(unittest.TestCase):
         self.check_all_methods([], '', '', '', '')
 
 
+class TestStarsToRating(unittest.TestCase):
+    def test_stars_to_rating_round_trip(self):
+        for half in (False, True):
+            for rating in range(0, 11, 1 if half else 2):
+                self.assertEqual(stars_to_rating(rating_to_stars(rating, half)), rating)
+        self.assertEqual(stars_to_rating(rating_to_stars(5, True)), 5)
+        self.assertEqual(stars_to_rating(''), 0)
+
+
 def find_tests():
     ans = unittest.defaultTestLoader.loadTestsFromTestCase(TestRemoveBracketedText)
     ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestAuthorToAuthorSort))
+    ans.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TestStarsToRating))
     return ans

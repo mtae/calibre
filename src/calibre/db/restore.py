@@ -149,9 +149,8 @@ class Restore(Thread):
         except Exception:
             self.tb = traceback.format_exc()
             if self.failed_dirs:
-                for x in self.failed_dirs:
-                    for dirpath, tb in self.failed_dirs:
-                        self.tb += f'\n\n-------------\nFailed to restore: {dirpath}\n{tb}'
+                for dirpath, tb in self.failed_dirs:
+                    self.tb += f'\n\n-------------\nFailed to restore: {dirpath}\n{tb}'
             if self.failed_restores:
                 for book, tb in self.failed_restores:
                     self.tb += f'\n\n-------------\nFailed to restore: {book["path"]}\n{tb}'
@@ -308,7 +307,8 @@ class Restore(Thread):
                 for field, lmap in self.link_maps.items():
                     with suppress(Exception):
                         db.set_link_map(field, {k: v[0] for k, v in lmap.items()})
-            self.notes_errors = db.backend.restore_notes(self.progress_callback)
+            with db.new_api:  # One commit for all the notes, not one for each
+                self.notes_errors = db.backend.restore_notes(self.progress_callback)
 
     def replace_db(self):
         dbpath = os.path.join(self.src_library_path, 'metadata.db')

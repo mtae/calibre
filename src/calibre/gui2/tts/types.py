@@ -116,7 +116,7 @@ class Voice(NamedTuple):
 
 def qvoice_to_voice(v: QVoice) -> Voice:
     lang = canonicalize_lang(QLocale.languageToCode(v.language())) or 'und'
-    country = QLocale.territoryToString(v.locale().territory())
+    country = QLocale.territoryToCode(v.locale().territory())
     return Voice(v.name(), lang, country, gender=v.gender(), age=v.age())
 
 
@@ -428,3 +428,21 @@ def create_tts_backend(force_engine: str = '', config_name: str = CONFIG_NAME) -
         if ans.engine_name != engine_name:
             ans._qt_reload_after_configure(engine_name if engine_name in available_engines() else '')
     return ans
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    class TestVoice(unittest.TestCase):
+        def test_qvoice_territory(self):
+            def voice_text(locale_name):
+                v = SimpleNamespace(
+                    name=lambda: 'x', language=lambda: QLocale.Language.English, locale=lambda: QLocale(locale_name),
+                    gender=lambda: QVoice.Gender.Unknown, age=lambda: QVoice.Age.Other)
+                return qvoice_to_voice(v).short_text(SimpleNamespace(voices_have_quality_metadata=False))
+
+            self.assertEqual(voice_text('en_GB'), 'x (United Kingdom)')
+            self.assertEqual(voice_text('C'), 'x', 'a voice without a territory must not get a generic suffix')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestVoice)

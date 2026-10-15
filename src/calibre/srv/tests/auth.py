@@ -208,6 +208,53 @@ class TestAuth(BaseTest):
 
     # }}}
 
+    def test_newest_book_ids_invalid_restriction(self):  # {{{
+        from calibre.db.legacy import create_backend
+        from calibre.ebooks.metadata.book.base import Metadata
+        from calibre.srv.handler import Handler
+        from calibre.srv.opts import Options
+
+        Data = namedtuple('Data', 'username')
+        with TemporaryDirectory() as base:
+            path = os.path.join(base, 'l1')
+            create_backend(path).close()
+            ctx = Handler((path,), Options(userdb=':memory:')).router.ctx
+            db = ctx.get_library(Data(None))
+            db.create_book_entry(Metadata('One', ['A']))
+            db.create_book_entry(Metadata('Two', ['B']))
+            ctx.user_manager.add_user('a', 'a')
+            self.ae(ctx.newest_book_ids(Data('a'), db), [2, 1])
+            ctx.user_manager.update_user_restrictions('a', {'library_restrictions': {'l1': 'title:One'}})
+            self.ae(ctx.newest_book_ids(Data('a'), db), [1])
+            # an invalid restriction must fail closed, not show all books
+            ctx.user_manager.update_user_restrictions('a', {'library_restrictions': {'l1': '(('}})
+            self.ae(ctx.newest_book_ids(Data('a'), db), [])
+            db.close()
+
+    # }}}
+
+    def test_manage_users_cli_stdin_password(self):  # {{{
+        import io
+        from unittest.mock import patch
+
+        from calibre.srv.manage_users_cli import main
+        from calibre.srv.users import UserManager
+
+        um = UserManager(':memory:')
+        for newline in ('\n', '\r\n'):
+            with patch('sys.stdin', io.StringIO('secret' + newline)):
+                main(um, ['add', 'u'])
+            self.assertEqual(um.get('u'), 'secret')
+            with patch('sys.stdin', io.StringIO('other' + newline)):
+                main(um, ['chpass', 'u'])
+            self.assertEqual(um.get('u'), 'other')
+            um.remove_user('u')
+        main(um, ['add', 'u', 'secret'])
+        main(um, ['chpass', 'u', 'other'])
+        self.assertEqual(um.get('u'), 'other')
+
+    # }}}
+
     def test_digest_auth(self):  # {{{
         "Test HTTP Digest auth"
         from calibre.srv.http_request import normalize_header_name

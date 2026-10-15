@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2014, Kovid Goyal <kovid at kovidgoyal.net>
 
+import os
+import traceback
 from collections import defaultdict, namedtuple
 from operator import itemgetter
 
@@ -133,13 +135,36 @@ class ImportOPML(QDialog):
         path = str(self.path.text())
         if not path:
             return error_dialog(self, _('Path not specified'), _('You must specify the path to the OPML file to import'), show=True)
-        with open(path, 'rb') as f:
-            raw = f.read()
-        self.recipes = tuple(import_opml(raw, self.preserve_groups.isChecked()))
+        try:
+            with open(path, 'rb') as f:
+                raw = f.read()
+            self.recipes = tuple(import_opml(raw, self.preserve_groups.isChecked()))
+        except Exception as err:
+            return error_dialog(self, _('Failed to read OPML'), str(err), det_msg=traceback.format_exc(), show=True)
         if len(self.recipes) == 0:
             return error_dialog(self, _('No feeds found'), _('No importable RSS feeds found in the OPML file'), show=True)
 
         QDialog.accept(self)
+
+
+def find_tests():
+    import tempfile
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    class TestImportOPML(unittest.TestCase):
+        def test_accept_reports_unreadable_opml(self):
+            with tempfile.TemporaryDirectory() as tdir:
+                empty = os.path.join(tdir, 'empty.opml')
+                open(empty, 'wb').close()
+                for path in (os.path.join(tdir, 'missing.opml'), empty):
+                    dialog = SimpleNamespace(path=SimpleNamespace(text=lambda p=path: p), preserve_groups=SimpleNamespace(isChecked=lambda: True))
+                    with patch(f'{__name__}.error_dialog') as show_error:
+                        ImportOPML.accept(dialog)
+                    show_error.assert_called_once()
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestImportOPML)
 
 
 if __name__ == '__main__':

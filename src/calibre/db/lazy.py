@@ -173,14 +173,14 @@ def dt_getter(field):
 def item_getter(field, default_value=None, key=0):
     def func(dbref, book_id, cache):
         try:
-            return cache[field]
+            ret = cache[field]
         except KeyError:
             db = dbref()
             ret = cache[field] = db.field_for(field, book_id, default_value=default_value)
-            try:
-                return ret[key]
-            except IndexError, KeyError:
-                return default_value
+        try:
+            return ret[key]
+        except IndexError, KeyError:
+            return default_value
 
     return func
 
@@ -446,7 +446,7 @@ class ProxyMetadata(Metadata):
 
     def all_field_keys(self):
         um = ga(self, '_user_metadata')
-        return ALL_METADATA_FIELDS.union(frozenset(um.all_field_keys()))
+        return um.memoized('proxy_all_field_keys', lambda: ALL_METADATA_FIELDS.union(frozenset(um.all_field_keys())))
 
     def all_non_none_fields(self):
         self._unimplemented_exception('all_non_none_fields', add_txt=False)

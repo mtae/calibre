@@ -140,7 +140,7 @@ class EmptyNav(BaseError):
         'The nav document for this book contains no table of contents, or an empty table of contents.'
         ' Use the Table of Contents tool to add a Table of Contents to this book.'
     )
-    LEVEL = WARN
+    level = WARN
 
     def __init__(self, name, lnum):
         BaseError.__init__(self, _('Missing ToC in navigation document'), name, lnum)

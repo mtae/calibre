@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # License: GPLv3 Copyright: 2011, Kovid Goyal <kovid@kovidgoyal.net>
 
-import os
 import string
 import struct
 from collections import OrderedDict
@@ -11,6 +10,7 @@ from io import BytesIO
 from tinycss.color3 import parse_color_string
 
 from calibre.ebooks import normalize
+from calibre.ebooks.oeb.reproducible import random_bytes
 from calibre.utils.img import image_from_data, image_to_data, png_data_to_gif_data, resize_image, save_cover_data_to, scale_image
 from calibre.utils.imghdr import what
 from calibre.utils.localization import _
@@ -505,7 +505,7 @@ def write_font_record(data, obfuscate=True, compress=True):
         data = zlib.compress(data, 9)
     if obfuscate and len(data) >= 1040:
         flags |= 0b10
-        xor_key = os.urandom(key_len)
+        xor_key = random_bytes(key_len)
         key = bytearray(xor_key)
         data = bytearray(data)
         for i in range(1040):

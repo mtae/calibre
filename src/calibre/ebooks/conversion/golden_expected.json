@@ -1,0 +1,908 @@
+{
+ "css.azw3": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 264,
+   "records": 20,
+   "text_length": 7729,
+   "text_records": 2,
+   "type": 2,
+   "version": 8
+  },
+  "records": [
+   [
+    "INDX",
+    248,
+    "b0f52f8dd4ceb1d1"
+   ],
+   [
+    "INDX",
+    260,
+    "f787e1ba94489acf"
+   ],
+   [
+    "data",
+    56,
+    "6da122e7ce8cfa0b"
+   ],
+   [
+    "INDX",
+    244,
+    "80b73a309aaeef8e"
+   ],
+   [
+    "INDX",
+    280,
+    "5ae78f3dd3ac93ae"
+   ],
+   [
+    "INDX",
+    232,
+    "288d3c610c42f393"
+   ],
+   [
+    "INDX",
+    208,
+    "f1dc4280a1e25efc"
+   ],
+   [
+    "data",
+    20,
+    "5bb93c841073c35e"
+   ],
+   [
+    "INDX",
+    256,
+    "71d0fc5ba9bb7190"
+   ],
+   [
+    "INDX",
+    224,
+    "e3e363245aaf6866"
+   ],
+   [
+    "data",
+    20,
+    "a405bf622bf3dd0a"
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FDST",
+    44,
+    "19ed71582459ca21"
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    52,
+    "cbfaddf7e7cdde46"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 7729,
+   "records": [
+    "4ecca6767df49843",
+    "485a8d0780ed9900"
+   ],
+   "sha": "a683107dea127aaf"
+  },
+  "trailing": "26d4b6db80f83152"
+ },
+ "css.epub": {
+  "META-INF/": "e3b0c44298fc1c14",
+  "META-INF/container.xml": "2ffba6b75d46c551",
+  "c1.html": "4a595170073e5255",
+  "c2.html": "d13b465fa30bcd38",
+  "content.opf": "aada7618be4ce42f",
+  "cover.jpg": "473e95de1748bc03",
+  "mimetype": "e468e350d1143eb6",
+  "page_styles.css": "cd25dd478221b3e7",
+  "stylesheet.css": "4da717674def0d88",
+  "titlepage.xhtml": "bc5c0b03503039b4",
+  "toc.ncx": "3218407c8ba44d8b"
+ },
+ "css.mobi": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 232,
+   "records": 12,
+   "text_length": 6184,
+   "text_records": 2,
+   "type": 2,
+   "version": 6
+  },
+  "records": [
+   [
+    "pad",
+    2
+   ],
+   [
+    "INDX",
+    240,
+    "c2bb31fe893d32cb"
+   ],
+   [
+    "INDX",
+    220,
+    "8ff60ab1e4e71b03"
+   ],
+   [
+    "data",
+    20,
+    "a405bf622bf3dd0a"
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    44,
+    "52e9c81f73770742"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 6184,
+   "records": [
+    "44f8244ade01bcc5",
+    "1ba596e56dd8db07"
+   ],
+   "sha": "98ce5648cb6c6571"
+  },
+  "trailing": "13ea1a95f14eac2b"
+ },
+ "images.azw3": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 264,
+   "records": 28,
+   "text_length": 2990,
+   "text_records": 1,
+   "type": 2,
+   "version": 8
+  },
+  "records": [
+   [
+    "pad",
+    2
+   ],
+   [
+    "INDX",
+    248,
+    "093081081c026392"
+   ],
+   [
+    "INDX",
+    260,
+    "051edd8dc75cb659"
+   ],
+   [
+    "data",
+    56,
+    "6da122e7ce8cfa0b"
+   ],
+   [
+    "INDX",
+    244,
+    "80b73a309aaeef8e"
+   ],
+   [
+    "INDX",
+    280,
+    "93dd5b84887bdbc6"
+   ],
+   [
+    "INDX",
+    232,
+    "288d3c610c42f393"
+   ],
+   [
+    "INDX",
+    208,
+    "f1dc4280a1e25efc"
+   ],
+   [
+    "data",
+    20,
+    "5bb93c841073c35e"
+   ],
+   [
+    "INDX",
+    256,
+    "71d0fc5ba9bb7190"
+   ],
+   [
+    "INDX",
+    224,
+    "85f7070b1c39eb8a"
+   ],
+   [
+    "data",
+    24,
+    "fed2418ebacc8674"
+   ],
+   [
+    "image",
+    "png",
+    30,
+    20
+   ],
+   [
+    "image",
+    "jpeg",
+    44,
+    33
+   ],
+   [
+    "image",
+    "png",
+    36,
+    24
+   ],
+   [
+    "image",
+    "jpeg",
+    52,
+    39
+   ],
+   [
+    "image",
+    "png",
+    42,
+    28
+   ],
+   [
+    "image",
+    "jpeg",
+    60,
+    45
+   ],
+   [
+    "image",
+    "png",
+    48,
+    32
+   ],
+   [
+    "image",
+    "jpeg",
+    68,
+    51
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FDST",
+    44,
+    "2ae3821e9fee2f0e"
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    52,
+    "02e5a5fb63af96a7"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 2990,
+   "records": [
+    "f9a6d33fdd1a3794"
+   ],
+   "sha": "f9a6d33fdd1a3794"
+  },
+  "trailing": "2075905679a3f4dd"
+ },
+ "images.epub": {
+  "META-INF/": "e3b0c44298fc1c14",
+  "META-INF/container.xml": "2ffba6b75d46c551",
+  "c1.html": "78d304879ff2c004",
+  "c2.html": "3140fec486a0a6b6",
+  "content.opf": "41103eaed298002b",
+  "cover.jpg": "473e95de1748bc03",
+  "i0.png": "daf75eb96d68b403",
+  "i1.jpg": "b89af133e974308c",
+  "i2.png": "f8b9c5b94ffa6f51",
+  "i3.jpg": "86cdd4305afbb957",
+  "i4.png": "06be917bfd65e7ff",
+  "i5.jpg": "05573b8cb1e0578e",
+  "i6.png": "6889c4fb2003958b",
+  "i7.jpg": "31714875e62c2d66",
+  "mimetype": "e468e350d1143eb6",
+  "page_styles.css": "cd25dd478221b3e7",
+  "stylesheet.css": "5f704ccd7301fae6",
+  "titlepage.xhtml": "bc5c0b03503039b4",
+  "toc.ncx": "d4872d71f0cdb42b"
+ },
+ "images.mobi": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 232,
+   "records": 18,
+   "text_length": 1545,
+   "text_records": 1,
+   "type": 2,
+   "version": 6
+  },
+  "records": [
+   [
+    "INDX",
+    240,
+    "c2bb31fe893d32cb"
+   ],
+   [
+    "INDX",
+    220,
+    "3fdba75de9d8365c"
+   ],
+   [
+    "data",
+    24,
+    "fed2418ebacc8674"
+   ],
+   [
+    "image",
+    "jpeg",
+    30,
+    20
+   ],
+   [
+    "image",
+    "jpeg",
+    44,
+    33
+   ],
+   [
+    "image",
+    "jpeg",
+    36,
+    24
+   ],
+   [
+    "image",
+    "jpeg",
+    52,
+    39
+   ],
+   [
+    "image",
+    "jpeg",
+    42,
+    28
+   ],
+   [
+    "image",
+    "jpeg",
+    60,
+    45
+   ],
+   [
+    "image",
+    "jpeg",
+    48,
+    32
+   ],
+   [
+    "image",
+    "jpeg",
+    68,
+    51
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    44,
+    "db573d2c74312d8e"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 1545,
+   "records": [
+    "845fec9f03b0e631"
+   ],
+   "sha": "845fec9f03b0e631"
+  },
+  "trailing": "da2ffdff2f44bdfe"
+ },
+ "text.azw3": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 264,
+   "records": 26,
+   "text_length": 27628,
+   "text_records": 7,
+   "type": 2,
+   "version": 8
+  },
+  "records": [
+   [
+    "pad",
+    1
+   ],
+   [
+    "INDX",
+    248,
+    "d1fd3c7708628051"
+   ],
+   [
+    "INDX",
+    544,
+    "209f88bee4662010"
+   ],
+   [
+    "data",
+    336,
+    "d43fa41ed88e3121"
+   ],
+   [
+    "INDX",
+    244,
+    "94d7be42a344097b"
+   ],
+   [
+    "INDX",
+    684,
+    "ff5822e6d43a18d9"
+   ],
+   [
+    "INDX",
+    232,
+    "288d3c610c42f393"
+   ],
+   [
+    "INDX",
+    208,
+    "608e69e1c7186640"
+   ],
+   [
+    "data",
+    20,
+    "5bb93c841073c35e"
+   ],
+   [
+    "INDX",
+    256,
+    "1ef1ba69e6b8397d"
+   ],
+   [
+    "INDX",
+    256,
+    "019017f35e8e7c1d"
+   ],
+   [
+    "data",
+    40,
+    "632aa3da2a644055"
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FDST",
+    44,
+    "b999c80934d8ac3f"
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    52,
+    "b31959cd1f036ffd"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 27628,
+   "records": [
+    "50d93372a2800049",
+    "670e0886b662ea47",
+    "b71d6d43d051c2dd",
+    "02f217aaa57b9d67",
+    "be8bdbba47193815",
+    "ef9a7a0d483cc880",
+    "030b91964e1c7ec9"
+   ],
+   "sha": "8f7a346127613ef8"
+  },
+  "trailing": "7835e6bb3e9d9250"
+ },
+ "text.epub": {
+  "META-INF/": "e3b0c44298fc1c14",
+  "META-INF/container.xml": "2ffba6b75d46c551",
+  "chapter1_split_000.html": "7fae4b29b1e0f7e0",
+  "chapter1_split_001.html": "13af639589810b12",
+  "chapter1_split_002.html": "bd28451a1efb495e",
+  "chapter1_split_003.html": "c6ae1a7d26ccdac9",
+  "chapter2_split_000.html": "e1f9b1679c57b6f1",
+  "chapter2_split_001.html": "2c333473d85ef485",
+  "chapter2_split_002.html": "96ce5b83b4779c2d",
+  "chapter2_split_003.html": "4c202bb50e07ed19",
+  "chapter3_split_000.html": "e0c3959350ea32b8",
+  "chapter3_split_001.html": "b27bb7d2396daf29",
+  "chapter3_split_002.html": "6bfb6f58ad1ad0b4",
+  "chapter3_split_003.html": "bf7aa83eae1b08a5",
+  "chapter4_split_000.html": "ae308d94b91f4699",
+  "chapter4_split_001.html": "2332f543a109f462",
+  "chapter4_split_002.html": "66b1f6238fe2e9fd",
+  "chapter4_split_003.html": "c79b820a0d52e2fe",
+  "content.opf": "7671770c329911c7",
+  "cover.jpg": "473e95de1748bc03",
+  "mimetype": "e468e350d1143eb6",
+  "page_styles.css": "cd25dd478221b3e7",
+  "stylesheet.css": "cf7a3214bb430878",
+  "titlepage.xhtml": "bc5c0b03503039b4",
+  "toc.ncx": "4851218167440fe8"
+ },
+ "text.mobi": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 232,
+   "records": 15,
+   "text_length": 16622,
+   "text_records": 5,
+   "type": 2,
+   "version": 6
+  },
+  "records": [
+   [
+    "pad",
+    3
+   ],
+   [
+    "INDX",
+    240,
+    "3d908318dc764059"
+   ],
+   [
+    "INDX",
+    244,
+    "1b3ff6a89f0bad76"
+   ],
+   [
+    "data",
+    40,
+    "632aa3da2a644055"
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    44,
+    "8d3f48d898963e2f"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 16622,
+   "records": [
+    "ce5db0704443dd08",
+    "1f725fcabe4c9f39",
+    "53b1cd16bf703d04",
+    "0a3b5c570d52c23d",
+    "bfef56f9b83f4f0c"
+   ],
+   "sha": "078b832f47b1594b"
+  },
+  "trailing": "b1555764fc6cf40b"
+ },
+ "txt.azw3": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 264,
+   "records": 21,
+   "text_length": 9956,
+   "text_records": 3,
+   "type": 2,
+   "version": 8
+  },
+  "records": [
+   [
+    "INDX",
+    248,
+    "e5ef1a7a2b73c962"
+   ],
+   [
+    "INDX",
+    276,
+    "5ef92b0fb8dddc22"
+   ],
+   [
+    "data",
+    76,
+    "36f398122c6a419a"
+   ],
+   [
+    "INDX",
+    244,
+    "3e3bc6db59dc3a02"
+   ],
+   [
+    "INDX",
+    308,
+    "5ec44b849d5abd45"
+   ],
+   [
+    "INDX",
+    232,
+    "288d3c610c42f393"
+   ],
+   [
+    "INDX",
+    208,
+    "8450b1ae238d810b"
+   ],
+   [
+    "data",
+    20,
+    "5bb93c841073c35e"
+   ],
+   [
+    "INDX",
+    256,
+    "90b19e1039b96d1a"
+   ],
+   [
+    "INDX",
+    240,
+    "d19b6b00d6e2b652"
+   ],
+   [
+    "data",
+    32,
+    "84e83d8a0ee19385"
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FDST",
+    44,
+    "48c19e03d17ba1a7"
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    52,
+    "4ea69b1cc72b8cc0"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 9956,
+   "records": [
+    "3a95727b8450c0ee",
+    "afb37b00c3671ac6",
+    "a8ac0f4a11d68c6b"
+   ],
+   "sha": "0dbe0f4848ee3806"
+  },
+  "trailing": "b61efa7b73e3864d"
+ },
+ "txt.epub": {
+  "META-INF/": "e3b0c44298fc1c14",
+  "META-INF/container.xml": "2ffba6b75d46c551",
+  "content.opf": "6d14c9bfbdbeb650",
+  "cover.jpg": "473e95de1748bc03",
+  "index_split_000.html": "526f5904e222419d",
+  "index_split_001.html": "aaad279784d29221",
+  "index_split_002.html": "815f66eae37645dd",
+  "mimetype": "e468e350d1143eb6",
+  "page_styles.css": "cd25dd478221b3e7",
+  "stylesheet.css": "7ce84d10eb351ebe",
+  "titlepage.xhtml": "bc5c0b03503039b4",
+  "toc.ncx": "045bb03082ba7e35"
+ },
+ "txt.mobi": {
+  "header": {
+   "compression": "0002",
+   "encoding": 65001,
+   "extra_data_flags": 3,
+   "header_length": 232,
+   "records": 12,
+   "text_length": 7149,
+   "text_records": 2,
+   "type": 2,
+   "version": 6
+  },
+  "records": [
+   [
+    "pad",
+    3
+   ],
+   [
+    "INDX",
+    240,
+    "55d7379d9b711450"
+   ],
+   [
+    "INDX",
+    236,
+    "27eecc279713fbe7"
+   ],
+   [
+    "data",
+    32,
+    "84e83d8a0ee19385"
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "image",
+    "jpeg",
+    90,
+    120
+   ],
+   [
+    "FLIS",
+    36,
+    "17d828b58581e73e"
+   ],
+   [
+    "FCIS",
+    44,
+    "e5d50b5dacc5897c"
+   ],
+   [
+    "data",
+    4,
+    "3712d3408f89530c"
+   ]
+  ],
+  "text": {
+   "length": 7149,
+   "records": [
+    "30b6f304cf430290",
+    "1c404ca35c7cdbd3"
+   ],
+   "sha": "3bc1ea35ce0b138d"
+  },
+  "trailing": "57e51206af98de74"
+ }
+}

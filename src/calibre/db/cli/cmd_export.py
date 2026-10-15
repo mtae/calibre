@@ -114,12 +114,12 @@ class DBProxy:
                 f.write(fdata)
 
 
-def export(opts, dbctx, book_id, dest, dbproxy, length, first):
+def export(opts, dbctx, book_id, dest, dbproxy, length, first, used_components=None):
     mi, plugboards, formats, library_id, template_funcs = dbctx.run('export', 'setup', book_id, opts.formats)
     extra_files = plugboards.pop('extra_files_for_export', ())
     if dbctx.is_remote and first:
         load_user_template_functions(library_id, template_funcs)
-    return do_save_book_to_disk(dbproxy, book_id, mi, plugboards, formats, dest, opts, length, extra_files)
+    return do_save_book_to_disk(dbproxy, book_id, mi, plugboards, formats, dest, opts, length, extra_files, used_components)
 
 
 def main(opts, args, dbctx):
@@ -135,8 +135,9 @@ def main(opts, args, dbctx):
     dbproxy = DBProxy(dbctx)
     dest, opts, length = sanitize_args(dest, opts)
     total = len(book_ids)
+    used_components = set()
     for i, book_id in enumerate(book_ids):
-        export(opts, dbctx, book_id, dest, dbproxy, length, i == 0)
+        export(opts, dbctx, book_id, dest, dbproxy, length, i == 0, used_components)
         if opts.progress:
             num = i + 1
             print(f'\r  {num / total:.1%} [{num}/{total}]', end=' ' * 20)

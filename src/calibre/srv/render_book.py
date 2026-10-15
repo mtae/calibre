@@ -297,10 +297,10 @@ def parse_smil_time(x):
         minutes, seconds = int(parts[0]), float(parts[1])
         seconds = max(0, min(abs(minutes), 59)) * 60 + max(0, min(abs(seconds), 59))
     elif len(parts) == 1:
-        if x.endswith('s'):
-            seconds = float(x[:-1])
-        elif x.endswith('ms'):
+        if x.endswith('ms'):
             seconds = float(x[:-2]) * 0.001
+        elif x.endswith('s'):
+            seconds = float(x[:-1])
         elif x.endswith('min'):
             seconds = float(x[:-3]) * 60
         elif x.endswith('h'):

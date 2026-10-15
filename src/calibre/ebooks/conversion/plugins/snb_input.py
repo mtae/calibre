@@ -1,6 +1,7 @@
 # License: GPLv3 Copyright: 2010, Li Fanxi <lifanxi@freemindworld.com>
 
 import os
+import re
 
 from calibre.customize.conversion import InputFormatPlugin
 from calibre.ptempfile import TemporaryDirectory
@@ -11,7 +12,7 @@ HTML_TEMPLATE = '<html><head><meta http-equiv="Content-Type" content="text/html;
 
 
 def html_encode(s):
-    return (
+    s = (
         s
         .replace('&', '&amp;')
         .replace('<', '&lt;')
@@ -19,8 +20,9 @@ def html_encode(s):
         .replace('"', '&quot;')
         .replace("'", '&apos;')
         .replace('\n', '<br/>')
-        .replace(' ', '&nbsp;')
     )  # noqa: E501
+    # Only indentation and runs of spaces need protecting, single spaces must remain break opportunities
+    return re.sub(r'^ +| {2,}', lambda m: '&nbsp;' * len(m.group()), s)
 
 
 class SNBInput(InputFormatPlugin):
@@ -125,3 +127,17 @@ class SNBInput(InputFormatPlugin):
                     item.html_input_href = f
 
         return oeb
+
+
+def find_tests():
+    import unittest
+
+    class SNBInputTest(unittest.TestCase):
+        def test_html_encode_spaces(self):
+            # Single spaces between words must stay breakable, indentation and space runs must survive
+            self.assertEqual(html_encode('hello world <b>'), 'hello world &lt;b&gt;')
+            self.assertEqual(html_encode('a b  c'), 'a b&nbsp;&nbsp;c')
+            self.assertEqual(html_encode('  a b'), '&nbsp;&nbsp;a b')
+            self.assertEqual(html_encode(' a'), '&nbsp;a')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(SNBInputTest)

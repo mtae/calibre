@@ -3,6 +3,7 @@
 
 import glob
 import os
+import threading
 from contextlib import suppress
 from datetime import timedelta
 from io import BytesIO
@@ -101,6 +102,43 @@ class AddRemoveTest(BaseTest):
         db.close()
         del db
 
+    # }}}
+
+    def test_add_file_failing_stream(self):  # {{{
+        "Test that a stream that fails when read does not destroy the existing format or extra file it was to replace"
+        cache = self.init_cache()
+
+        class FailingStream:
+            def __init__(self):
+                self.first = True
+
+            def read(self, size=-1):
+                if self.first:
+                    self.first = False
+                    return b'partial'
+                raise OSError('cannot read')
+
+        def folder_listing():
+            base = os.path.join(cache.backend.library_path, cache.field_for('path', 1))
+            return sorted(os.path.relpath(os.path.join(r, f), base) for r, _, files in os.walk(base) for f in files)
+
+        cache.add_extra_files(1, {'sub/extra.txt': BytesIO(b'old extra')})
+        old_format, files = cache.format(1, 'FMT1'), folder_listing()
+        size = cache.format_metadata(1, 'FMT1', allow_cache=False)['size']
+        self.assertRaises(OSError, cache.add_format, 1, 'FMT1', FailingStream(), run_hooks=False)
+        self.assertEqual(cache.format(1, 'FMT1'), old_format)
+        self.assertEqual(cache.format_metadata(1, 'FMT1', allow_cache=False)['size'], size)
+        self.assertEqual(folder_listing(), files, 'a temporary file was left behind or a file went missing')
+        self.assertRaises(OSError, cache.add_extra_files, 1, {'sub/extra.txt': FailingStream(), 'new/dir/file.txt': FailingStream()})
+        with open(os.path.join(cache.backend.library_path, cache.field_for('path', 1), 'sub', 'extra.txt'), 'rb') as f:
+            self.assertEqual(f.read(), b'old extra')
+        self.assertTrue(set(files) <= set(folder_listing()))
+        self.assertEqual([x for x in folder_listing() if x.endswith('.tmp')], [])
+        # A working replacement leaves no temporary file either
+        self.assertTrue(cache.add_format(1, 'FMT1', BytesIO(b'new data'), run_hooks=False))
+        self.assertEqual(cache.format(1, 'FMT1'), b'new data')
+        cache.add_extra_files(1, {'sub/extra.txt': BytesIO(b'new extra')})
+        self.assertEqual([x for x in folder_listing() if x.endswith('.tmp')], [])
     # }}}
 
     def test_add_format_categories(self):  # {{{
@@ -351,6 +389,79 @@ class AddRemoveTest(BaseTest):
         book_id = cache.create_book_entry(mi, preserve_uuid=True)
         self.assertEqual(mi.uuid, cache.field_for('uuid', book_id))
 
+        # A composite column rendered when the new book is added must use the series index assigned to it
+        cache.create_custom_column('cidx', 'CIDX', 'composite', False, display={'composite_template': '{series}:{series_index}'})
+        cache.close()
+        cache = self.init_cache()
+        cache.search('#cidx:true')
+        mi = Metadata('Created Two', authors=('Creator One',))
+        mi.series = 'A Series One'  # has books 1 (index 2) and 2 (index 1), so the new book gets index 3
+        book_id = cache.create_book_entry(mi)
+        self.assertEqual(3.0, cache.field_for('series_index', book_id))
+        self.assertEqual('A Series One:3', cache.field_for('#cidx', book_id))
+        self.assertIn(book_id, cache.search('#cidx:true'))
+
+    # }}}
+
+    def test_add_books_one_transaction(self):  # {{{
+        "Test that a book is added with its formats in one transaction, and that a book that fails to add leaves nothing behind"
+        import threading
+
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        class FailingStream(BytesIO):
+            def read(self, *a):
+                raise OSError('Injected failure reading the format')
+
+        def state(cache, book_ids):
+            return {x: (cache.field_for('title', x), cache.field_for('authors', x), cache.field_for('tags', x), cache.format(x, 'FMT1')) for x in book_ids}
+
+        for run_hooks in (False, True):
+            for bad_position in (-1, 0, 2):
+                label = f'run_hooks={run_hooks} bad_position={bad_position}'
+                cache = self.init_cache(self.clone_library(self.library_path))
+                ids_before = cache.all_book_ids()
+                commits = []
+                this_thread = threading.get_ident()  # The scan of pages commits in a thread of its own
+                cache.backend.conn.set_commit_hook(lambda: (commits.append(1) if threading.get_ident() == this_thread else None, False)[1])
+                books = []
+                for i in range(4):
+                    mi = Metadata(f'Batch Book {i}', [f'Batch Author {i}'])
+                    mi.tags = ['batch', f'batch{i}']
+                    stream = FailingStream(b'x') if i == bad_position else BytesIO(f'batch data {i}'.encode())
+                    books.append((mi, {'FMT1': stream, 'FMT2': BytesIO(f'second {i}'.encode())}))
+                if bad_position < 0:
+                    ids, duplicates = cache.add_books(books, run_hooks=run_hooks)
+                    self.assertEqual((len(ids), duplicates), (4, []), label)
+                    added = sorted(ids)
+                else:
+                    with self.assertRaises(OSError, msg=label):
+                        cache.add_books(books, run_hooks=run_hooks)
+                    added = sorted(cache.all_book_ids() - ids_before)
+                    self.assertEqual([cache.field_for('title', x) for x in added], [f'Batch Book {i}' for i in range(bad_position)], label)
+                self.assertEqual(len(commits), len(added), f'{label}: not one commit per added book')
+                for i, x in enumerate(added):
+                    formats = {f: cache.format(x, f) for f in cache.formats(x)}
+                    self.assertEqual(formats, {'FMT1': f'batch data {i}'.encode(), 'FMT2': f'second {i}'.encode()}, label)
+                # The cache agrees with the database
+                book_ids, cache_state, library_path = cache.all_book_ids(), state(cache, cache.all_book_ids()), cache.backend.library_path
+                cache.close()  # Stops its background threads, which write to the database
+                reader = self.init_cache(library_path)
+                self.assertEqual((book_ids, cache_state), (reader.all_book_ids(), state(reader, book_ids)), label)
+                if bad_position >= 0:
+                    self.assertFalse(reader.search(f'title:"=Batch Book {bad_position}"'), label)
+                    # The failed book can be added again
+                    cache = reader
+                    retry = Metadata(f'Batch Book {bad_position}', ['Batch Author'])
+                    ids, duplicates = cache.add_books([(retry, {'FMT1': BytesIO(b'retry')})], run_hooks=run_hooks)
+                    self.assertEqual(len(ids), 1, label)
+                reader.close()
+        cache = self.init_cache()
+        mi = Metadata('Duplicate Test', ['Some One'])
+        self.assertEqual(len(cache.add_books([(mi, {'FMT1': BytesIO(b'a')})])[0]), 1)
+        ids, duplicates = cache.add_books([(Metadata('Duplicate Test', ['Some One']), {'FMT1': BytesIO(b'b')})], add_duplicates=False)
+        self.assertEqual((ids, len(duplicates)), ([], 1))
+
     # }}}
 
     def test_add_books(self):  # {{{
@@ -368,6 +479,61 @@ class AddRemoveTest(BaseTest):
         self.assertEqual(set(cache.formats(book_id)), {'FMT1', 'FMT2'})
         self.assertEqual(cache.format(book_id, 'FMT1'), FMT1)
         self.assertEqual(cache.format(book_id, 'FMT2'), FMT2)
+
+    # }}}
+
+    def test_add_books_failing_book(self):  # {{{
+        "Test that a book that cannot be added leaves no trace and the books added before it stay added, and that every book is one transaction"
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        class FailingStream(BytesIO):
+            def read(self, *a):
+                raise OSError('Injected failure reading the format')
+
+        for run_hooks in (False, True):
+            for bad_position in (0, 2, 3):
+                cache = self.init_cache(self.clone_library(self.library_path))
+                backend = cache.backend
+                ids_before = cache.all_book_ids()
+                commits = []
+                # Commits made by this thread (the scan of pages runs in a thread of its own)
+                this_thread = threading.get_ident()
+                backend.conn.set_commit_hook(lambda: (commits.append(1) if threading.get_ident() == this_thread else None, False)[1])
+                events = []
+                dispatcher = cache.event_dispatcher
+
+                class Recorder:
+                    def __call__(self, event_type, *args):
+                        events.append((event_type.name, args))
+                        return dispatcher(event_type, *args)
+
+                    def __getattr__(self, name):
+                        return getattr(dispatcher, name)
+
+                cache.event_dispatcher = Recorder()
+                books = []
+                for i in range(4):
+                    mi = Metadata(f'Batch Book {i}', [f'Batch Author {i}'])
+                    stream = FailingStream(b'x') if i == bad_position else BytesIO(f'batch data {i}'.encode())
+                    books.append((mi, {'FMT1': stream, 'FMT2': BytesIO(f'second {i}'.encode())}))
+                label = f'run_hooks={run_hooks} bad_position={bad_position}'
+                with self.assertRaises(OSError, msg=label):
+                    cache.add_books(books, run_hooks=run_hooks)
+                added = sorted(cache.all_book_ids() - ids_before)
+                self.assertEqual(len(added), bad_position, label)
+                self.assertEqual([cache.field_for('title', x) for x in added], [f'Batch Book {i}' for i in range(bad_position)], label)
+                for i, x in enumerate(added):
+                    self.assertEqual({f: cache.format(x, f) for f in cache.formats(x)}, {'FMT1': f'batch data {i}'.encode(), 'FMT2': f'second {i}'.encode()}, label)
+                self.assertEqual(len(commits), bad_position, f'{label}: not one commit per added book')
+                self.assertEqual([x for x in events if x[0] == 'book_created'], [('book_created', (x,)) for x in added], label)
+                self.assertFalse(cache.fields['title'].table.book_col_map.keys() - cache.all_book_ids(), label)
+                self.assert_library_consistent(cache)
+                self.assertFalse(cache.search('title:"=Batch Book %d"' % bad_position), label)
+                # The failed book can be added again
+                ids, duplicates = cache.add_books([(Metadata(f'Batch Book {bad_position}', ['Batch Author']), {'FMT1': BytesIO(b'retry')})], run_hooks=run_hooks)
+                self.assertEqual(len(ids), 1, label)
+                self.assert_library_consistent(cache)
+                cache.close()
 
     # }}}
 
@@ -487,6 +653,134 @@ class AddRemoveTest(BaseTest):
             cache.move_format_from_trash(1, fmt)
         self.assertEqual(all_formats, cache.formats(1))
         self.assertFalse(os.listdir(os.path.join(cache.backend.trash_dir, 'f')))
+
+    # }}}
+
+    def test_remove_books_failures(self):  # {{{
+        "Test that removing books leaves the library consistent when some books cannot be removed"
+        from calibre.db.errors import BooksNotRemoved
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        base_library = self.library_path
+        position_map = {'first': (0,), 'middle': (2,), 'last': (4,), 'all': (0, 1, 2, 3, 4)}
+
+        def make_books(cache):
+            ids = []
+            for i in range(5):
+                mi = Metadata(f'Failure Test {i}', [f'Failure Author {i}'])
+                book_id = cache.create_book_entry(mi, cover=IMG)
+                cache.add_format(book_id, 'FMT1', BytesIO(f'fmt1 data {i}'.encode()))
+                cache.add_format(book_id, 'FMT2', BytesIO(f'fmt2 data {i}'.encode()))
+                ids.append(book_id)
+            return ids
+
+        def check(permanent, bad_positions, inject, restore):
+            cache = self.init_cache(self.clone_library(base_library))
+            backend = cache.backend
+            ids = make_books(cache)
+            bad = {ids[i] for i in bad_positions}
+            good = [x for x in ids if x not in bad]
+            formats_before = {x: {f: cache.format(x, f) for f in ('FMT1', 'FMT2')} for x in ids}
+            self.assert_library_consistent(cache)
+            before = self.collect_book_files(cache)
+            events = []
+
+            class Recorder:
+                def __init__(self, dispatcher):
+                    self.dispatcher = dispatcher
+
+                def __call__(self, event_type, *args):
+                    events.append((event_type.name, args))
+                    return self.dispatcher(event_type, *args)
+
+                def __getattr__(self, name):
+                    return getattr(self.dispatcher, name)
+
+            cache.event_dispatcher = Recorder(cache.event_dispatcher)
+            restore_injection = inject(cache, bad)
+            try:
+                with self.assertRaises(BooksNotRemoved) as cm:
+                    cache.remove_books(ids, permanent=permanent)
+            finally:
+                restore_injection()
+            err = cm.exception
+            self.assertEqual(set(err.failures), bad)
+            self.assertIn('injected failure', ''.join(err.failures.values()))
+            self.assertEqual(set(err.removed), set(good))
+            # Events are sent only for the books that were really removed
+            removed_events = [set(args[0]) for name, args in events if name == 'books_removed']
+            self.assertEqual(removed_events, [set(good)] if good else [])
+
+            self.assert_library_consistent(cache)
+            self.assertEqual(set(cache.all_book_ids()) & set(ids), bad)
+            if permanent:
+                after = self.collect_book_files(cache)
+                self.assertFalse({x for x in after if x[0] in good}, 'Files of removed books remain')
+                self.assertEqual({x for x in after if x[0] in bad}, {x for x in before if x[0] in bad})
+            else:
+                self.assert_files_conserved(before, cache)
+                self.assertEqual({x.book_id for x in cache.list_trash_entries()[0]}, set(good))
+            for book_id in bad:
+                for f in ('FMT1', 'FMT2'):
+                    self.assertEqual(cache.format(book_id, f), formats_before[book_id][f])
+                self.assertEqual(cache.cover(book_id), IMG)
+
+            # Now that the problem is gone, the rest can be removed
+            if bad:
+                cache.remove_books(sorted(bad), permanent=permanent)
+            self.assertFalse(set(cache.all_book_ids()) & set(ids))
+            self.assert_library_consistent(cache)
+            if not permanent:
+                self.assert_files_conserved(before, cache)
+                if restore:
+                    book_id = good[-1] if good else sorted(bad)[-1]
+                    cache.move_book_from_trash(book_id)
+                    self.assertIn(book_id, cache.all_book_ids())
+                    for f in ('FMT1', 'FMT2'):
+                        self.assertEqual(cache.format(book_id, f), formats_before[book_id][f])
+                    self.assertEqual(cache.cover(book_id), IMG)
+                    self.assert_library_consistent(cache)
+                    self.assert_files_conserved(before, cache)
+
+        def inject_file_failure(permanent):
+            def inject(cache, bad):
+                backend = cache.backend
+                name = 'rmtree' if permanent else 'move_book_to_trash'
+                orig = getattr(backend, name)
+                bad_dirs = {os.path.dirname(cache.format_abspath(x, 'FMT1')) for x in bad}
+                bad_paths = {os.path.abspath(x) for x in bad_dirs}
+
+                def failing(*args):
+                    path = args[-1]
+                    if os.path.abspath(path) in bad_paths:
+                        raise OSError('injected failure: simulated locked file')
+                    return orig(*args)
+
+                setattr(backend, name, failing)
+                return lambda: setattr(backend, name, orig)
+
+            return inject
+
+        def inject_sql_failure(cache, bad):
+            conn = cache.backend.conn
+            for book_id in bad:
+                conn.cursor().execute(
+                    f"CREATE TEMP TRIGGER inject_failure_{book_id} BEFORE DELETE ON books WHEN old.id={book_id} "
+                    "BEGIN SELECT RAISE(ABORT, 'injected failure: simulated sql error'); END"
+                )
+
+            def restore():
+                for book_id in bad:
+                    conn.cursor().execute(f'DROP TRIGGER temp.inject_failure_{book_id}')
+
+            return restore
+
+        for permanent in (False, True):
+            for position, bad_positions in position_map.items():
+                with self.subTest(permanent=permanent, failing=position, kind='files'):
+                    check(permanent, bad_positions, inject_file_failure(permanent), restore=position == 'middle')
+            with self.subTest(permanent=permanent, failing='middle', kind='sql'):
+                check(permanent, position_map['middle'], inject_sql_failure, restore=True)
 
     # }}}
 

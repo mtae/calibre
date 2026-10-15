@@ -384,7 +384,7 @@ class AddItemDialog(QDialog):
         l.addWidget(b)
         self.icon_widget = QLabel()
         self.icon_widget.setPixmap(QIcon.ic('blank.png').pixmap(QSize(16, 16)))
-        l.addWidget(self.icon)
+        l.addWidget(self.icon_widget)
         tb = self.icon_chooser = QToolButton()
         tb.setIcon(QIcon.cached_icon('icon_choose.png'))
         tb.setEnabled(False)
@@ -846,7 +846,7 @@ class TbIconRulesTab(LazyConfigWidgetBase, Ui_Form):
                         os.remove(path)
                     except Exception:
                         pass
-                tbvip[cat_item.lookup_name].pop(value_text, None)
+                tbvip.get(cat_item.lookup_name, {}).pop(value_text, None)
                 continue
 
             if cat_item.is_new:

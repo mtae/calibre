@@ -1655,6 +1655,10 @@ class SMART_DEVICE_APP(DeviceConfig, DevicePlugin):
 
                 while remaining > 0:
                     v = self._read_binary_from_net(min(remaining, self.max_book_packet_len))
+                    if not v:
+                        # the peer closed the connection, so there is no more data coming
+                        self._close_device_socket()
+                        raise ControlError(desc='Device closed the network connection')
                     outfile.write(v)
                     remaining -= len(v)
                 eof = True

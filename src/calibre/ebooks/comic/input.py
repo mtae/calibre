@@ -37,7 +37,12 @@ def extract_comic(path_to_comic_file):
         bn = os.path.basename(x)
         nbn = clean_ascii_chars(bn.replace('#', '_'))
         if nbn and nbn != bn:
-            os.rename(x, os.path.join(os.path.dirname(x), nbn))
+            base, ext = os.path.splitext(nbn)
+            dest, c = os.path.join(os.path.dirname(x), nbn), 0
+            while os.path.exists(dest):  # do not overwrite another page
+                c += 1
+                dest = os.path.join(os.path.dirname(x), f'{base}_{c}{ext}')
+            os.rename(x, dest)
     return tdir
 
 
@@ -323,3 +328,33 @@ def process_pages(pages, opts, update, tdir):
         ans += pages
         failures += failures_
     return ans, failures
+
+
+def find_tests():
+    import unittest
+    from unittest.mock import patch
+
+    from calibre.ptempfile import TemporaryDirectory
+
+    class ComicInputTest(unittest.TestCase):
+        def test_extract_comic_keeps_pages_with_colliding_names(self):
+            def fake_extract(path, tdir):
+                for name, data in (('p#1.jpg', b'A'), ('p_1.jpg', b'B')):
+                    with open(os.path.join(tdir, name), 'wb') as f:
+                        f.write(data)
+
+            with TemporaryDirectory() as tdir, patch(f'{__name__}.extract', fake_extract), patch(f'{__name__}.PersistentTemporaryDirectory', lambda **kw: tdir):
+                extracted = extract_comic('x.cbz')
+                pages = []
+                for name in sorted(os.listdir(extracted)):
+                    with open(os.path.join(extracted, name), 'rb') as f:
+                        pages.append(f.read())
+                self.assertEqual(sorted(pages), [b'A', b'B'])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(ComicInputTest)
+
+
+if __name__ == '__main__':
+    from calibre.utils.run_tests import run_tests
+
+    run_tests(find_tests)

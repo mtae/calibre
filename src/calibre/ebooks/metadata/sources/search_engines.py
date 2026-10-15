@@ -386,7 +386,7 @@ def google_consent_cookies():
     b['name'], b['value'] = 'CONSENT', 'PENDING+987'
     yield b
     template = b'\x08\x01\x128\x08\x14\x12+boq_identityfrontenduiserver_20231107.05_p0\x1a\x05en-US \x03\x1a\x06\x08\x80\xf1\xca\xaa\x06'
-    template.replace(b'20231107', date.today().strftime('%Y%m%d').encode('ascii'))  # noqa: DTZ011
+    template = template.replace(b'20231107', date.today().strftime('%Y%m%d').encode('ascii'))  # noqa: DTZ011
     b = base.copy()
     b['name'], b['value'] = 'SOCS', standard_b64encode(template).decode('ascii').rstrip('=')
     yield b
@@ -567,3 +567,18 @@ def resolve_url(url):
 #     import sys
 #     func = sys.argv[-1]
 #     globals()[func]()
+
+
+def find_tests():
+    import unittest
+    from base64 import standard_b64decode
+    from datetime import date
+
+    class Test(unittest.TestCase):
+        def test_google_consent_cookie_date(self):
+            socs = next(c['value'] for c in google_consent_cookies() if c['name'] == 'SOCS')
+            raw = standard_b64decode(socs + '=' * (-len(socs) % 4))
+            self.assertIn(date.today().strftime('%Y%m%d').encode('ascii'), raw)  # noqa: DTZ011
+            self.assertNotIn(b'20231107', raw)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

@@ -579,7 +579,7 @@ class TagListEditor(QDialog, Ui_TagListEditor):
         item = table.itemAt(point)
         if item is None or item.column() in (WAS_COLUMN, COUNT_COLUMN):
             return
-        m = QMenu()
+        m = QMenu(self)
         if item.column() == NOTES_COLUMN:
             notes_item = table.item(item.row(), VALUE_COLUMN)
             assert notes_item is not None
@@ -1074,12 +1074,13 @@ class TagListEditor(QDialog, Ui_TagListEditor):
                 # Link column
                 self.undo_link_edit(table.item(row, LINK_COLUMN), id_)
                 # Notes column
-                notes_item = table.item(row, NOTES_COLUMN)
-                assert notes_item is not None
-                notes_item.setFlags(notes_item.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable)
-                if id_ in self.notes_utilities.modified_notes:
-                    self.notes_utilities.undo_note_edit(notes_item)
-                    notes_item.setIcon(QIcon.cached_icon(''))
+                if self.supports_notes:
+                    notes_item = table.item(row, NOTES_COLUMN)
+                    assert notes_item is not None
+                    notes_item.setFlags(notes_item.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsSelectable)
+                    if id_ in self.notes_utilities.modified_notes:
+                        self.notes_utilities.undo_note_edit(notes_item)
+                        notes_item.setIcon(QIcon.cached_icon(''))
 
     def selection_changed(self):
         table = self.table
@@ -1194,9 +1195,10 @@ class TagListEditor(QDialog, Ui_TagListEditor):
                 link = table.item(row, LINK_COLUMN)
                 assert link is not None
                 link.setFlags(link.flags() & ~(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable))
-                note = table.item(row, NOTES_COLUMN)
-                assert note is not None
-                note.setFlags(link.flags() & ~(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable))
+                if self.supports_notes:
+                    note = table.item(row, NOTES_COLUMN)
+                    assert note is not None
+                    note.setFlags(link.flags() & ~(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable))
         if row >= table.rowCount():
             row = table.rowCount() - 1
         if row >= 0:

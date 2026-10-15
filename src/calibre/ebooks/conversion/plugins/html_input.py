@@ -125,7 +125,6 @@ class HTMLInput(InputFormatPlugin):
 
     def create_oebbook(self, htmlpath, basedir, opts, log, mi):
         import logging
-        import uuid
 
         import css_parser
 
@@ -134,6 +133,7 @@ class HTMLInput(InputFormatPlugin):
         from calibre.ebooks.html.input import get_filelist
         from calibre.ebooks.metadata import string_to_authors
         from calibre.ebooks.oeb.base import BINARY_MIME, OEB_STYLES, DirContainer, rewrite_links, urldefrag, urlnormalize, urlquote, xpath
+        from calibre.ebooks.oeb.reproducible import uuid4
         from calibre.ebooks.oeb.transforms.metadata import meta_info_to_oeb_metadata
         from calibre.utils.localization import canonicalize_lang
 
@@ -163,7 +163,7 @@ class HTMLInput(InputFormatPlugin):
         if not metadata.title:
             oeb.logger.warn('Title not specified')
             metadata.add('title', self.oeb.translate(__('Unknown')))
-        bookid = str(uuid.uuid4())
+        bookid = str(uuid4())
         metadata.add('identifier', bookid, id='uuid_id', scheme='uuid')
         for ident in metadata.identifier:
             if 'id' in ident.attrib:

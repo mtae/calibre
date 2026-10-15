@@ -908,14 +908,14 @@ class Smarts(NullSmarts):
                 c.setPosition(start)
                 for b in boundaries:
                     if in_text:
-                        c.setPosition(start + b.offset, QTextCursor.MoveMode.KeepAnchor)
+                        c.setPosition(doc_position(block, b.offset), QTextCursor.MoveMode.KeepAnchor)
                         if c.hasSelection():
                             append(c.selectedText(), c.anchor())
                     in_text = not b.is_start
-                    c.setPosition(start + b.offset + 1)
+                    c.setPosition(doc_position(block, b.offset + 1))
                 if in_text:
                     # Add remaining text in block
-                    c.setPosition(block.position() + boundaries[-1].offset + 1)
+                    c.setPosition(doc_position(block, boundaries[-1].offset + 1))
                     c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
                     if c.hasSelection():
                         append(c.selectedText() + '\n', c.anchor())
@@ -1004,7 +1004,34 @@ def find_tests():
             self.assertTrue(Smarts.jump_to_enclosing_tag(self.smarts, self.editor))
             self.assertEqual(self.cursor.data[2 * self.cursor.pos :].decode('utf-16-le')[:2], 'i>')
 
-    return unittest.defaultTestLoader.loadTestsFromTestCase(TestTagPositions)
+    class TestFindText(unittest.TestCase):
+        # The highlighter records offsets in code points and QTextCursor positions are in UTF-16 code units
+        def find(self, raw, pat, position=0):
+            import regex
+
+            from calibre.gui2 import ensure_app
+            from calibre.gui2.tweak_book.editor.text import TextEdit
+
+            ensure_app()
+            ed = TextEdit()
+            ed.load_text(raw, syntax='html')
+            ed.highlighter.join()
+            c = ed.textCursor()
+            c.setPosition(position)
+            ed.setTextCursor(c)
+            return str(ed.textCursor().selectedText()) if ed.find_text(regex.compile(pat)) else None
+
+        def test_find_text_after_tags_and_non_bmp(self):
+            cat = '\U0001f431'
+            for raw, pat in (
+                (f'<p>{cat}{cat}<b>x</b> target</p>', 'target'),
+                (f'<p>one</p>\n<p>{cat}{cat}<b>x</b> needle</p>', 'needle'),
+                (f'<p>{cat}{cat}{cat}<b>x</b>find me<i>y</i></p>', 'find me'),
+            ):
+                with self.subTest(raw=raw):
+                    self.assertEqual(self.find(raw, pat), pat)
+
+    return unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(t) for t in (TestTagPositions, TestFindText))
 
 
 if __name__ == '__main__':  # {{{

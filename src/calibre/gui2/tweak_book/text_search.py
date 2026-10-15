@@ -231,7 +231,7 @@ def find_text_in_chunks(pat, chunks):
             continue  # this chunk ends before start
         if start_pos is None:
             if contains(clen, start):
-                start_pos = chunk_start + (start - offset)
+                start_pos = chunk_start + utf16_length(chunk[: start - offset])
         if start_pos is not None:
             if contains(clen, after - 1):
                 end_pos = chunk_start + utf16_length(chunk[: after - offset])

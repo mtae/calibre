@@ -169,6 +169,8 @@ lzxd_read_input(struct lzxd_stream *lzx) {
         sym = lzx->tbl##_table[PEEK_BITS(LZX_##tbl##_TABLEBITS)];             \
         /* is the symbol is longer than [tablebits] bits? (i=node index) */   \
         if (sym >= LZX_##tbl##_MAXSYMBOLS) {                                  \
+            /* a table without any symbols (all lengths zero) has no codes */ \
+            if (sym == 0xFFFF) return lzx->error = MSPACK_ERR_DECRUNCH;       \
             /* decode remaining bits by tree traversal */                     \
             i = 1 << (BITBUF_WIDTH - LZX_##tbl##_TABLEBITS);                  \
             do {                                                              \

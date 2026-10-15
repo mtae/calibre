@@ -464,10 +464,7 @@ Matcher_init(Matcher *self, PyObject *args, PyObject *kwds) {
     for (i = 0; i < (int32_t)self->item_count; i++) {
         p = PySequence_Fast_GET_ITEM(py_items, i);
         self->items[i] = python_to_icu(p, self->item_lengths + i);
-        if (self->items[i] == NULL) {
-            PyErr_NoMemory();
-            goto end;
-        }
+        if (self->items[i] == NULL) goto end;  // python_to_icu() has set the exception
     }
 
 end:

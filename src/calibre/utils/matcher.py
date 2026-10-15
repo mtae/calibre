@@ -279,6 +279,11 @@ def test(return_tests=False):
             positions = next(iter(m(raw).values()))
             self.assertEqual(positions, (0, 1, 2))
 
+        def test_invalid_items(self):
+            for items in ([1], ['abc', 2], [b'abc'], [None]):
+                with self.assertRaises(TypeError, msg=f'Matcher({items!r}) did not raise a TypeError'):
+                    CScorer(items)
+
         def test_empty_items(self):
             # Matcher() filters out empty items, but the C extension accepts
             # them. ICU refuses to search in an empty string and the error used

@@ -1096,6 +1096,8 @@ icu_BreakIterator_set_text(icu_BreakIterator *self, PyObject *input) {
         buf = NULL;
         PyErr_SetString(PyExc_ValueError, u_errorName(status));
     } else {
+        // The break iterator no longer refers to the previous text
+        free(self->text);
         self->text = buf;
         self->text_len = sz;
     }

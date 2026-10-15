@@ -342,6 +342,9 @@ class TestAuth(BaseTest):
             cookie_handler = HTTPCookieProcessor(cj)
             r = build_opener(auth_handler, cookie_handler).open(url)
             self.ae(r.getcode(), http.client.OK)
+            set_cookie = r.headers.get_all('Set-Cookie')
+            self.ae(len(set_cookie), 1)
+            self.assertIn('HttpOnly', set_cookie[0])
             cookies = tuple(cj)
             self.ae(len(cookies), 1)
             cookie = cookies[0]

@@ -382,5 +382,17 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>opt_no_process</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>opt_comic_image_size</receiver>
+   <slot>setDisabled(bool)</slot>
+  </connection>
+  <connection>
+   <sender>opt_no_process</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>label_2</receiver>
+   <slot>setDisabled(bool)</slot>
+  </connection>
  </connections>
 </ui>

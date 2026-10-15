@@ -422,10 +422,10 @@ class HTTPRequest(Connection):
         if line is None:
             return
         bytes_read[0] += len(line)
-        try:
-            chunk_size = int(line.strip(), 16)
-        except Exception:
-            return self.simple_response(http.client.BAD_REQUEST, f'{reprlib.repr(line.strip())} is not a valid chunk size')
+        size = line.strip()
+        if not re.fullmatch(rb'[0-9a-fA-F]+', size):
+            return self.simple_response(http.client.BAD_REQUEST, f'{reprlib.repr(size)} is not a valid chunk size')
+        chunk_size = int(size, 16)
         if bytes_read[0] + chunk_size + 2 > self.max_request_body_size:
             return self.simple_response(
                 http.client.REQUEST_ENTITY_TOO_LARGE,

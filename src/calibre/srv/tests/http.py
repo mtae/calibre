@@ -303,6 +303,16 @@ class TestHTTP(BaseTest):
             self.ae(r.status, http.client.BAD_REQUEST)
             self.assertIn(b'not a valid chunk size', r.read())
 
+            # Chunk sizes must be plain hex digits: no sign, underscore or 0x prefix
+            for bad_size in (b'-4', b'+4', b'0x4', b'4_0', b'-0'):
+                conn = server.connect()
+                conn.request('POST', '/test', headers={'Transfer-Encoding': 'chunked'})
+                conn.send(bad_size + b'\r\nbody\r\n0\r\n\r\n')
+                r = conn.getresponse()
+                self.ae(r.status, http.client.BAD_REQUEST, bad_size)
+                self.assertIn(b'not a valid chunk size', r.read())
+
+            conn = server.connect()
             conn.request('POST', '/test', headers={'Transfer-Encoding': 'chunked'})
             conn.send(b'4\r\nbody\r\n200\r\n\r\n')
             r = conn.getresponse()

@@ -316,6 +316,17 @@ class TestICU(unittest.TestCase):
                 with self.assertRaises(TypeError, msg=f'{name}({a!r}, {b!r})'):
                     getattr(c, name)(a, b)
 
+    def test_normalize_expansion(self):
+        "Test normalization of strings that grow by more than a factor of two"
+        _icu = icu._icu
+        # U+FDFA expands to 18 characters in NFKC and NFKD
+        for mode in (_icu.NFKC, _icu.NFKD):
+            self.ae(len(_icu.normalize(mode, '\ufdfa')), 18)
+            self.ae(len(_icu.normalize(mode, 'x\ufdfa' * 10)), 190)
+        self.ae(_icu.normalize(_icu.NFD, '\u00e9'), 'e\u0301')
+        self.ae(_icu.normalize(_icu.NFC, 'e\u0301'), '\u00e9')
+        self.ae(_icu.normalize(_icu.NFKD, ''), '')
+
     def test_roundtrip(self):
         "Test roundtripping"
         for r in ('xxx\0\u2219\U0001f431xxx', '\0', '', 'simple'):

@@ -1923,12 +1923,16 @@ icu_normalize(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     while (1) {
         rsz = unorm2_normalize(n, source, sz, dest, cap, &status);
         if (status == U_BUFFER_OVERFLOW_ERROR) {
-            cap *= 2;
-            dest = (UChar *)realloc(dest, cap * sizeof(UChar));
-            if (dest == NULL) {
+            // rsz is the required capacity. ICU does nothing when passed a
+            // failure code, so status has to be reset before retrying.
+            status = U_ZERO_ERROR;
+            cap = rsz + 1;
+            UChar *bigger = (UChar *)realloc(dest, cap * sizeof(UChar));
+            if (bigger == NULL) {
                 PyErr_NoMemory();
                 goto end;
             }
+            dest = bigger;
             continue;
         }
         break;

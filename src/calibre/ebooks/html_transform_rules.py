@@ -160,7 +160,7 @@ def validate_rule(rule):
     if mt not in MATCH_TYPE_MAP:
         return _('Unknown match type'), _('The match type %s is not known') % mt
     if mt != '*' and not rule['query']:
-        _('Query required'), _('You must specify a value for the tag to match')
+        return _('Query required'), _('You must specify a value for the tag to match')
     m = MATCH_TYPE_MAP[rule['match_type']]
     err = m.validator(rule.get('query') or '')
     if err:
@@ -588,6 +588,7 @@ def test(return_tests=False):  # {{{
             av('xpath', '//h:p')
             ai('xpath', '//h:p[')
             ai(atype='wrap')
+            self.ae(validate_rule({'match_type': 'is', 'query': '', 'actions': [{'type': 'remove', 'data': ''}]})[0], 'Query required')
 
         def test_export_import(self):
             rule = {

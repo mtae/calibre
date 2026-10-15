@@ -305,6 +305,17 @@ class TestICU(unittest.TestCase):
             {' ': [''], 'A': ['A1', 'a1'], '\U0001f431': ['\U0001f431', '\U0001f431x']},
         )
 
+    def test_collator_argument_errors(self):
+        "Test that invalid arguments to Collator methods raise TypeError"
+        c = icu._icu.Collator('en')
+        # Before the fix, startswith() called Py_DECREF() on its malloc()ed
+        # buffer when the second argument was invalid, which corrupts the heap
+        # and can crash
+        for a, b in (('\x01', 5), ('abc', None), (5, 'abc')):
+            for name in ('startswith', 'strcmp', 'contains', 'find'):
+                with self.assertRaises(TypeError, msg=f'{name}({a!r}, {b!r})'):
+                    getattr(c, name)(a, b)
+
     def test_roundtrip(self):
         "Test roundtripping"
         for r in ('xxx\0\u2219\U0001f431xxx', '\0', '', 'simple'):

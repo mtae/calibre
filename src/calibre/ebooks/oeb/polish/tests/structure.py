@@ -83,6 +83,18 @@ class Structure(BaseTest):
         c = get_container(ep, tdir=os.path.join(self.tdir, f'container{n}'), tweak_mode=True)
         return c
 
+    def test_manifest_order(self):
+        from calibre.ebooks.oeb.base import OEBBook
+        from calibre.utils.logging import default_log
+
+        manifest = OEBBook(default_log).manifest
+        hrefs = [f'{i}.html' for i in range(200)]
+        for i, href in enumerate(hrefs):
+            manifest.add(f'id{i}', href, 'text/html')
+        manifest.remove('id7')
+        del hrefs[7]
+        self.assertEqual(hrefs, [item.href for item in manifest])
+
     def test_toc_detection(self):
         ep = os.path.join(self.tdir, 'book.epub')
         create_book(Metadata('Test ToC'), ep)

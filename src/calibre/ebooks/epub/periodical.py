@@ -182,7 +182,7 @@ def sony_metadata(oeb):
                     title=xml(atitle),
                     author=xml(auth),
                     updated=updated,
-                    desc=desc,
+                    desc=xml(desc),
                     short_title=short_title,
                     section_title=sectitle,
                     href=article.href,

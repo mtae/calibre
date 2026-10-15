@@ -630,6 +630,39 @@ class TestImports(unittest.TestCase):
                 count += 1
         return count
 
+    def test_find_tests_registrations(self):
+        # Every module with a top level find_tests() must be registered in
+        # find_tests() below exactly once, with its a(find_tests()) call,
+        # otherwise a merge can lose or duplicate tests without any failure
+        import re
+        d = os.path.dirname
+        SRC = d(d(d(os.path.abspath(__file__))))
+        src_file = os.path.join(SRC, 'calibre', 'utils', 'run_tests.py')
+        if not os.path.exists(src_file):
+            self.skipTest('No source tree')
+        with open(src_file) as f:
+            src = f.read()
+        start = src.index('\ndef find_tests(')
+        body = src[start:src.index('\ndef ', start + 1)]
+        imported = re.findall(r'^ +from ([\w.]+) import find_tests$', body, flags=re.M)
+        called = re.findall(r'^ +from ([\w.]+) import find_tests\n\n +a\(find_tests\(', body, flags=re.M)
+        self.assertEqual(imported, called, 'find_tests imported without a(find_tests())')
+        self.assertEqual(sorted(x for x in set(imported) if imported.count(x) > 1), [], 'find_tests registered twice')
+        collected_packages = ('calibre.db.tests.', 'calibre.srv.tests.')  # by find_tests_in_package()
+        unregistered = []
+        for root, dirs, files in os.walk(os.path.join(SRC, 'calibre')):
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                path = os.path.join(root, fname)
+                with open(path, 'rb') as f:
+                    if re.search(rb'^def find_tests\(', f.read(), flags=re.M) is None:
+                        continue
+                name = os.path.relpath(path, SRC)[:-3].replace(os.sep, '.').removesuffix('.__init__')
+                if name != 'calibre.utils.run_tests' and not name.startswith(collected_packages) and name not in imported:
+                    unregistered.append(name)
+        self.assertEqual(sorted(unregistered), [], 'find_tests() not registered in run_tests.find_tests()')
+
     def test_import_of_all_python_modules(self):
 
         exclude_packages = {'calibre.devices.mtp.unix.upstream'}

@@ -352,6 +352,7 @@ def process_stylesheet(css: str, opts: Options) -> str:
         pr.cssText = cr.cssText[len(f'/* {CSS_COMMENT_COOKIE}: ') : -3]
         sheet.deleteRule(i)
         sheet.insertRule(pr, i)
+    page_rules = []  # the restored rules are now real @page rules, collected again below if needed
 
     if opts.for_removal:
         return sheet.cssText if changed else css

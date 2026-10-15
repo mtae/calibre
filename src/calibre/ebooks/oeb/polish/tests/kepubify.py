@@ -11,6 +11,7 @@ from calibre.ebooks.oeb.polish.kepubify import (
     Options,
     kepubify_html_data,
     kepubify_parsed_html,
+    process_stylesheet,
     serialize_html,
     unkepubify_path,
 )
@@ -58,6 +59,19 @@ class KepubifyTests(BaseTest):
         for has_cover in (True, False):
             for epub_version in '23':
                 b(has_cover, epub_version)
+
+    def test_process_stylesheet(self):
+        css = '@page { margin: 1em }\np { widows: 2 }'
+        both = Options(remove_widows_and_orphans=True, remove_at_page_rules=True)
+        removed = process_stylesheet(css, both).decode()
+        self.assertIn(f'{CSS_COMMENT_COOKIE}: @page', removed)
+        # re-processing without remove_at_page_rules restores the @page rule and must not comment it out again
+        again = process_stylesheet(removed, Options(remove_widows_and_orphans=True)).decode()
+        self.assertEqual(again.count(CSS_COMMENT_COOKIE + ': @page'), 0)
+        self.assertIn('@page', again)
+        self.assertEqual(process_stylesheet(again, Options(for_removal=True)).decode().count(CSS_COMMENT_COOKIE), 0)
+        # with remove_at_page_rules the rule is commented out once only
+        self.assertEqual(process_stylesheet(removed, both).decode(), removed)
 
     def test_kepubify_html(self):
         prefix = f'''<?xml version='1.0' encoding='utf-8'?>

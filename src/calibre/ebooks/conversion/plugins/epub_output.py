@@ -266,7 +266,7 @@ class EPUBOutput(OutputFormatPlugin):
 
         if uuid is None:
             self.log.warn('No UUID identifier found')
-            from uuid import uuid4
+            from calibre.ebooks.oeb.reproducible import uuid4
 
             uuid = str(uuid4())
             oeb.metadata.add('identifier', uuid, scheme='uuid', id=uuid)

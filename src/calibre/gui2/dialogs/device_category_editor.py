@@ -84,9 +84,11 @@ class DeviceCategoryEditor(QDialog, Ui_DeviceCategoryEditor):
             error_dialog(self, _('Item is blank'), _('An item cannot be set to nothing. Delete it instead.')).exec()
             item.setText(item.previous_text())
             return
+        id_ = int(item.data(Qt.ItemDataRole.UserRole))
         if item.text() != item.initial_text():
-            id_ = int(item.data(Qt.ItemDataRole.UserRole))
             self.to_rename[id_] = str(item.text())
+        else:
+            self.to_rename.pop(id_, None)
 
     def rename_tag(self):
         item = self.available_tags.currentItem()

@@ -1431,6 +1431,8 @@ class DeviceMixin:  # {{{
             ids = [id for id in ids if self.current_db.has_id(id)]
             with BusyCursor():
                 files, _auto_ids = self.library_view._model.get_preferred_formats_from_ids(ids, settings.format_map, exclude_auto=do_auto_convert)
+            # files only has entries for the books that have a format the device accepts
+            ids = [book_id for book_id in ids if book_id not in _auto_ids]
             auto = []
             if do_auto_convert and _auto_ids:
                 for id in _auto_ids:
@@ -1502,6 +1504,8 @@ class DeviceMixin:  # {{{
             ids = [book_id for book_id in ids if self.current_db.has_id(book_id)]
             with BusyCursor():
                 files, _auto_ids = self.library_view._model.get_preferred_formats_from_ids(ids, settings.format_map, exclude_auto=do_auto_convert)
+            # files only has entries for the books that have a format the device accepts
+            ids = [book_id for book_id in ids if book_id not in _auto_ids]
             auto = []
             if do_auto_convert and _auto_ids:
                 for book_id in _auto_ids:

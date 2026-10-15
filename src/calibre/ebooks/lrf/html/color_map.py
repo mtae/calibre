@@ -95,7 +95,7 @@ NAME_MAP = {
     'yellowgreen': '#9ACD32',
 }
 
-hex_pat = re.compile(r'#(\d{2})(\d{2})(\d{2})')
+hex_pat = re.compile(r'#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})')
 rgb_pat = re.compile(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', re.IGNORECASE)
 
 
@@ -110,3 +110,17 @@ def lrs_color(html_color):
     if hcol in NAME_MAP:
         return NAME_MAP[hcol].replace('#', '0x00')
     return '0x00000000'
+
+
+def find_tests():
+    import unittest
+
+    class Test(unittest.TestCase):
+        def test_lrs_color(self):
+            self.assertEqual(lrs_color('#123456'), '0x00123456')
+            self.assertEqual(lrs_color('#ff0000'), '0x00ff0000')
+            self.assertEqual(lrs_color('#00FF7F'), '0x0000ff7f')
+            self.assertEqual(lrs_color('springgreen'), '0x0000FF7F')
+            self.assertEqual(lrs_color('notacolor'), '0x00000000')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

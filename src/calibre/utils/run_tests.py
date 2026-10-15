@@ -630,6 +630,39 @@ class TestImports(unittest.TestCase):
                 count += 1
         return count
 
+    def test_find_tests_registrations(self):
+        # Every module with a top level find_tests() must be registered in
+        # find_tests() below exactly once, with its a(find_tests()) call,
+        # otherwise a merge can lose or duplicate tests without any failure
+        import re
+        d = os.path.dirname
+        SRC = d(d(d(os.path.abspath(__file__))))
+        src_file = os.path.join(SRC, 'calibre', 'utils', 'run_tests.py')
+        if not os.path.exists(src_file):
+            self.skipTest('No source tree')
+        with open(src_file) as f:
+            src = f.read()
+        start = src.index('\ndef find_tests(')
+        body = src[start:src.index('\ndef ', start + 1)]
+        imported = re.findall(r'^ +from ([\w.]+) import find_tests$', body, flags=re.M)
+        called = re.findall(r'^ +from ([\w.]+) import find_tests\n\n +a\(find_tests\(', body, flags=re.M)
+        self.assertEqual(imported, called, 'find_tests imported without a(find_tests())')
+        self.assertEqual(sorted(x for x in set(imported) if imported.count(x) > 1), [], 'find_tests registered twice')
+        collected_packages = ('calibre.db.tests.', 'calibre.srv.tests.')  # by find_tests_in_package()
+        unregistered = []
+        for root, dirs, files in os.walk(os.path.join(SRC, 'calibre')):
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                path = os.path.join(root, fname)
+                with open(path, 'rb') as f:
+                    if re.search(rb'^def find_tests\(', f.read(), flags=re.M) is None:
+                        continue
+                name = os.path.relpath(path, SRC)[:-3].replace(os.sep, '.').removesuffix('.__init__')
+                if name != 'calibre.utils.run_tests' and not name.startswith(collected_packages) and name not in imported:
+                    unregistered.append(name)
+        self.assertEqual(sorted(unregistered), [], 'find_tests() not registered in run_tests.find_tests()')
+
     def test_import_of_all_python_modules(self):
 
         exclude_packages = {'calibre.devices.mtp.unix.upstream'}
@@ -729,6 +762,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.docx.writer.tests import find_tests
 
         a(find_tests())
+        from calibre.ebooks.docx.char_styles import find_tests
+
+        a(find_tests())
     if ok('cfi'):
         from calibre.ebooks.epub.cfi.tests import find_tests
 
@@ -765,19 +801,97 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.mobi.writer2.resources import find_tests
 
         a(find_tests())
+        from calibre.ebooks.conversion.golden_test import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.startup_test import find_tests
+
+        a(find_tests())
+        from calibre.customize.lazy_plugins_test import find_tests
+
+        a(find_tests())
         from calibre.ebooks.conversion.plugins.archive_input import find_tests
 
         a(find_tests())
         from calibre.ebooks.conversion.plugins.txt_input import find_tests
 
         a(find_tests())
+        from calibre.ebooks.conversion.regex_safety_test import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.comic.input import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.plugins.fb2_input import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.plugins.snb_input import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.utils import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.txt.markdownml import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.fb2.fb2ml import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.epub.periodical import find_tests
+
+        a(find_tests())
+        from calibre.library.catalogs.epub_mobi_builder import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.oeb.transforms.split import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.preprocess import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.txt.processor import find_tests
+
+        a(find_tests())
         from calibre.ebooks.metadata.rtf import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.rtf2xml.ParseRtf import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pml.pmlconverter import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.conversion.plugins.epub_input import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.lit import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.plucker import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.sources.amazon import find_tests
 
         a(find_tests())
         from calibre.ebooks.metadata.html import find_tests
 
         a(find_tests())
         from calibre.ebooks.metadata.fb2 import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.xmp import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.archive import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.sources.covers import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.sources.search_engines import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.metadata.book.render import find_tests
 
         a(find_tests())
         from calibre.utils.xml_parse import find_tests
@@ -789,19 +903,52 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.viewer.book_storage import find_tests
 
         a(find_tests())
+        from calibre.gui2.viewer.toc import find_tests
+
+        a(find_tests())
         from calibre.gui2.library.test_annotations import find_tests
+
+        a(find_tests())
+        from calibre.gui2.library.notes import find_tests
 
         a(find_tests())
         from calibre.gui2.tag_mapper import find_tests
 
         a(find_tests())
+        from calibre.gui2.dialogs.llm_book import find_tests
+
+        a(find_tests())
+        from calibre.gui2.comments_editor import find_tests
+
+        a(find_tests())
+        from calibre.gui2.preferences.look_feel_tabs import find_tests
+
+        a(find_tests())
+        from calibre.gui2.preferences.emailp import find_tests
+
+        a(find_tests())
+        from calibre.gui2.store.config.chooser.models import find_tests
+
+        a(find_tests())
+        from calibre.gui2.preferences.template_functions import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.spell import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html_entities import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.oeb.stylizer import find_tests
 
         a(find_tests())
         from calibre.ebooks.pdf.bidi_test import find_tests
 
         a(find_tests())
         from calibre.ebooks.pdf.reflow_test import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pdf.render.serialize import find_tests
 
         a(find_tests())
         from calibre.spell.dictionary import find_tests
@@ -815,6 +962,15 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.ai.anthropic.backend import find_tests
+
+        a(find_tests())
+        from calibre.ai.openai.backend import find_tests
+
+        a(find_tests())
+        from calibre.ai.openai_compatible.backend import find_tests
+
+        a(find_tests())
+        from calibre.ai.venice.backend import find_tests
 
         a(find_tests())
         from calibre.ai.structured import find_tests
@@ -837,13 +993,22 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
     if ok('misc'):
+        from calibre.utils.date import find_tests
+
+        a(find_tests())
         from calibre.ebooks.html.input import find_tests
+
+        a(find_tests())
+        from calibre.web.feeds.test_feeds import find_tests
 
         a(find_tests())
         from calibre.utils.avif_test import find_tests
 
         a(find_tests())
         from calibre.ebooks.metadata.test_author_sort import find_tests
+
+        a(find_tests())
+        from calibre.devices.test_device_db import find_tests
 
         a(find_tests())
         from calibre.ebooks.metadata.tag_mapper import find_tests
@@ -876,6 +1041,18 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.ebooks.compression.palmdoc import find_tests
 
         a(find_tests())
+        from calibre.ebooks.textile.unsmarten import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.pdb.plucker.reader import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.oeb.reader import find_tests
+
+        a(find_tests())
+        from calibre.ebooks.lrf.html.color_map import find_tests
+
+        a(find_tests())
         from calibre.gui2.viewer.convert_book import find_tests
 
         a(find_tests())
@@ -888,6 +1065,9 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.utils.copy_files_test import find_tests
 
         a(find_tests())
+        from calibre.utils.speedup_test import find_tests
+
+        a(find_tests())
         from calibre.utils.safe_atexit import find_tests
 
         a(find_tests())
@@ -895,6 +1075,54 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.gui2.geometry import find_tests
+
+        a(find_tests())
+        from calibre.gui2.store.stores.ebookpoint_plugin import find_tests
+
+        a(find_tests())
+        from calibre.gui2.metadata.single_download import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.editor.smarts.utils import find_tests
+
+        a(find_tests())
+        from calibre.gui2.actions.random import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.live_css import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.editor.smarts.html import find_tests
+
+        a(find_tests())
+        from calibre.gui2.save import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.editor.canvas import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tweak_book.text_search import find_tests
+
+        a(find_tests())
+        from calibre.gui2.llm import find_tests
+
+        a(find_tests())
+        from calibre.gui2.actions.add import find_tests
+
+        a(find_tests())
+        from calibre.gui2.dialogs.authors_edit import find_tests
+
+        a(find_tests())
+        from calibre.gui2.fts.search import find_tests
+
+        a(find_tests())
+        from calibre.gui2.preferences.adding import find_tests
+
+        a(find_tests())
+        from calibre.gui2.tts.types import find_tests
+
+        a(find_tests())
+        from calibre.gui2.dialogs.opml import find_tests
 
         a(find_tests())
         if iswindows:
@@ -912,6 +1140,15 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.utils.stop_gc import find_tests
+
+        a(find_tests())
+        from calibre.utils.smtp import find_tests
+
+        a(find_tests())
+        from calibre.library.catalogs.bibtex import find_tests
+
+        a(find_tests())
+        from calibre.devices.teclast.driver import find_tests
 
         a(find_tests())
     if ok('dbcli'):

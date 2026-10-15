@@ -101,7 +101,10 @@ class Context:
         restriction = self.restriction_for(request_data, db)
         allowed_book_ids = None
         if restriction:
-            allowed_book_ids = db.search('', restriction=restriction, allow_templates=False)
+            try:
+                allowed_book_ids = db.search('', restriction=restriction, allow_templates=False)
+            except ParseException:
+                allowed_book_ids = []
         return db.newly_added_book_ids(count=count, book_ids=allowed_book_ids)
 
     def get_allowed_book_ids_from_restriction(self, request_data, db):

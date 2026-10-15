@@ -476,8 +476,10 @@ class KOBO(USBMS):
                     prefix = self._main_prefix
                 elif oncard == 'carda' and row['ContentID'].startswith('file:///mnt/sd/'):
                     prefix = self._card_a_prefix
+                else:
+                    continue
                 changed = update_booklist(
-                    self._main_prefix,
+                    prefix,
                     path,
                     row['Title'],
                     row['Attribution'],
@@ -936,7 +938,7 @@ class KOBO(USBMS):
             if ReadStatus == 0:
                 datelastread = None
             else:
-                datelastread = 'CURRENT_TIMESTAMP' if datelastread is None else datelastread
+                datelastread = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()) if datelastread is None else datelastread
 
             t = (
                 ReadStatus,

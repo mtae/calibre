@@ -350,8 +350,8 @@ class InsertImage(Dialog):
             basename = n + '.' + e.lower()
             d = ChooseName(basename, self)
             if d.exec() == QDialog.DialogCode.Accepted and d.filename:
-                self.accept()
                 self.chosen_image_is_external = (d.filename, path)
+                self.accept()
 
     def zoom_in(self):
         self.d.change_size(increase=True)
@@ -397,6 +397,8 @@ class InsertImage(Dialog):
 
     def accept(self):
         self.chosen_image = str(self.view.currentIndex().data() or '')
+        if not self.chosen_image and not self.chosen_image_is_external:
+            return error_dialog(self, _('No image selected'), _('You must select an image to insert'), show=True)
         super().accept()
 
     def filter_changed(self, *args):

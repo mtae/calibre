@@ -6,7 +6,7 @@ import os
 import shutil
 import time
 from collections import defaultdict
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from itertools import count, repeat
 
 import apsw
@@ -63,6 +63,7 @@ class Notes:
 
     def __init__(self, backend):
         self.temp_table_counter = count()
+        self.deferred_file_ops = None
         conn = backend.get_connection()
         libdir = os.path.dirname(os.path.abspath(conn.db_filename('main')))
         self.notes_dir = os.path.join(libdir, NOTES_DIR_NAME)
@@ -129,18 +130,60 @@ class Notes:
             self.remove_unreferenced_resources(conn)
 
     def remove_unreferenced_resources(self, conn):
-        found = False
-        for (rhash,) in conn.get('SELECT hash FROM notes_db.resources WHERE hash NOT IN (SELECT resource FROM notes_db.notes_resources_link)'):
-            found = True
-            remove_with_retry(self.path_for_resource(rhash))
-        if found:
+        hashes = [x for (x,) in conn.get('SELECT hash FROM notes_db.resources WHERE hash NOT IN (SELECT resource FROM notes_db.notes_resources_link)')]
+        if hashes:
             conn.execute('DELETE FROM notes_db.resources WHERE hash NOT IN (SELECT resource FROM notes_db.notes_resources_link)')
+            # The files cannot be restored, so they are removed only when the transaction is committed
+            self.do_file_operation(self.remove_resource_files, hashes)
+
+    def remove_resource_files(self, resource_hashes):
+        for rhash in resource_hashes:
+            remove_with_retry(self.path_for_resource(rhash))
 
     def path_for_resource(self, resource_hash: str) -> str:
         hashalg, digest = resource_hash.split(':', 1)
         prefix = digest[:2]
         # Can't use colons in filenames on windows safely
         return os.path.join(self.resources_dir, prefix, f'{hashalg}-{digest}')
+
+    def do_file_operation(self, func, *args):
+        # Run func(*args) now, or when the enclosing deferred_file_operations() succeeds
+        if self.deferred_file_ops is None:
+            func(*args)
+        else:
+            self.deferred_file_ops.append((func, args))
+
+    @contextmanager
+    def deferred_file_operations(self):
+        """
+        Retiring a note (moving its backup file to the retired directory and removing the resource files that nothing else uses)
+        cannot be undone. When it is done as part of a database transaction that is later rolled back, the note is still in the
+        database but its files are gone. Inside this context manager these operations are queued, and run only if the context exits
+        without an exception, so wrap it around the transaction. Failures to run the queued operations are printed and ignored: the
+        transaction was already committed so all that is left behind are unused files.
+        """
+        if self.deferred_file_ops is not None:  # nested, the outermost one runs the operations
+            ops, start = self.deferred_file_ops, len(self.deferred_file_ops)
+            try:
+                yield
+            except BaseException:
+                # The transaction of the nested block was rolled back, so what it queued must not run even if the
+                # outermost block catches the error and commits
+                del ops[start:]
+                raise
+            return
+        self.deferred_file_ops = ops = []
+        try:
+            yield
+        finally:
+            self.deferred_file_ops = None
+        for func, args in ops:
+            try:
+                func(*args)
+            except Exception:
+                import traceback
+
+                traceback.print_exc()
 
     def remove_resources(self, conn, note_id, resources_to_potentially_remove, delete_from_link_table=True):
         if not isinstance(resources_to_potentially_remove, tuple):
@@ -152,11 +195,15 @@ class Notes:
             ''',
                 tuple((note_id, x) for x in resources_to_potentially_remove),
             )
+        # The files cannot be restored, so they are removed only when the transaction is committed
+        self.do_file_operation(self.remove_unreferenced_resource_files, conn, resources_to_potentially_remove)
+
+    def remove_unreferenced_resource_files(self, conn, resource_hashes):
         stmt = '''
             WITH resources_table(value) AS (VALUES {})
             SELECT value FROM resources_table WHERE value NOT IN (SELECT resource FROM notes_db.notes_resources_link)
-        '''.format(','.join(repeat('(?)', len(resources_to_potentially_remove))))
-        for (x,) in conn.execute(stmt, resources_to_potentially_remove):
+        '''.format(','.join(repeat('(?)', len(resource_hashes))))
+        for (x,) in tuple(conn.execute(stmt, tuple(resource_hashes))):
             p = self.path_for_resource(x)
             remove_with_retry(p)
             remove_with_retry(p + METADATA_EXT)
@@ -171,19 +218,27 @@ class Notes:
 
     def set_backup_for(self, field_name, item_id, item_value, marked_up_text, searchable_text, resource_hashes):
         path = make_long_path_useable(os.path.join(self.backup_dir, field_name, str(item_id)))
+        # Written to a temporary file that replaces the backup, so that a failure does not destroy the existing backup
+        tmp = path + '.tmp'
         try:
-            f = open(path, 'wb')
+            f = open(tmp, 'wb')
         except FileNotFoundError:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            f = open(path, 'wb')
-        with f:
-            f.write(marked_up_text.encode('utf-8'))
-            f.write(SEP)
-            f.write(searchable_text.encode('utf-8'))
-            f.write(SEP)
-            f.write('\n'.join(resource_hashes).encode('utf-8'))
-            f.write(SEP)
-            f.write(item_value.encode('utf-8'))
+            f = open(tmp, 'wb')
+        try:
+            with f:
+                f.write(marked_up_text.encode('utf-8'))
+                f.write(SEP)
+                f.write(searchable_text.encode('utf-8'))
+                f.write(SEP)
+                f.write('\n'.join(resource_hashes).encode('utf-8'))
+                f.write(SEP)
+                f.write(item_value.encode('utf-8'))
+            os.replace(tmp, path)
+        except BaseException:
+            with suppress(OSError):
+                os.remove(tmp)
+            raise
 
     def path_to_retired_dir_for_item(self, field_name, item_id, item_value):
         key = icu_lower(item_value or '')
@@ -234,7 +289,7 @@ class Notes:
             add_item_value_to_searchable_text=False,
         )
         if note_id > -1:
-            remove_with_retry(srcdir, is_dir=True)
+            self.do_file_operation(remove_with_retry, srcdir, True)
         return note_id
 
     def remove_retired_entry(self, field_name, item_id, item_value):
@@ -269,15 +324,15 @@ class Notes:
                         'SELECT hash,name FROM notes_db.resources WHERE hash IN ({})'.format(','.join(repeat('?', len(old_resources)))),
                         tuple(old_resources),
                     )
-                self.retire_entry(field_name, item_id, item_value, resources, note_id)
+                self.do_file_operation(self.retire_entry, field_name, item_id, item_value, resources, note_id)
                 if old_resources:
-                    self.remove_resources(conn, note_id, old_resources, delete_from_link_table=False)
+                    self.do_file_operation(self.remove_resources, conn, note_id, old_resources, False)
             return -1
         new_resources = frozenset(used_resource_hashes)
         resources_to_potentially_remove = old_resources - new_resources
         resources_to_add = new_resources - old_resources
         if note_id is None:
-            self.remove_retired_entry(field_name, item_id, item_value)
+            self.do_file_operation(self.remove_retired_entry, field_name, item_id, item_value)
             if ctime is not None or mtime is not None:
                 now = time.time()
                 if ctime is None:

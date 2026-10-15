@@ -7,6 +7,7 @@ from functools import partial
 from qt.core import QDialog, QModelIndex, QObject, QTimer
 
 from calibre.constants import ismacos
+from calibre.db.errors import BooksNotRemoved
 from calibre.gui2 import Aborted, error_dialog
 from calibre.gui2.actions import InterfaceActionWithLibraryDrop
 from calibre.gui2.dialogs.confirm_delete import confirm
@@ -54,18 +55,23 @@ class MultiDeleter(QObject):  # {{{
         db = self.model.db
         try:
             db.new_api.remove_books(chunk, permanent=False)
+        except BooksNotRemoved as e:
+            # The books that could not be removed are left untouched, so there
+            # is nothing to retry, just report them
+            deleted = list(e.removed)
+            for book_id, tb in e.failures.items():
+                self.failures.append((book_id, self.title_for(book_id), tb))
         except Exception:
-            # Delete them one at a time so that one failure does not prevent
-            # the rest of the chunk from being deleted, and we know which
-            # book failed
             import traceback
 
+            tb = traceback.format_exc()
+            traceback.print_exc()
+            # remove_books() can fail after the books were removed from the
+            # database, so only the books that are still there have failed
             deleted = []
             for book_id in chunk:
-                try:
-                    db.new_api.remove_books((book_id,), permanent=False)
-                except Exception:
-                    self.failures.append((book_id, self.title_for(book_id), traceback.format_exc()))
+                if db.new_api.has_id(book_id):
+                    self.failures.append((book_id, self.title_for(book_id), tb))
                 else:
                     deleted.append(book_id)
         else:
@@ -543,7 +549,7 @@ class DeleteAction(InterfaceActionWithLibraryDrop):
         if len(to_delete_ids) < 5:
             try:
                 view.model().delete_books_by_id(to_delete_ids)
-            except OSError as err:
+            except (OSError, BooksNotRemoved) as err:
                 setattr(err, 'locking_violation_msg', _("Could not change on-disk location of this book's files."))
                 raise
             self.library_ids_deleted2(to_delete_ids, next_id=next_id, can_undo=True)

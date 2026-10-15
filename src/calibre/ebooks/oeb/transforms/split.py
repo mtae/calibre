@@ -22,7 +22,7 @@ from calibre import as_unicode, force_unicode
 from calibre.ebooks.epub import rules
 from calibre.ebooks.oeb.base import OEB_STYLES, XHTML, rewrite_links, urldefrag, urlnormalize
 from calibre.ebooks.oeb.base import XPNSMAP as NAMESPACES
-from calibre.ebooks.oeb.polish.split import do_split
+from calibre.ebooks.oeb.polish.split import do_split, do_split_inplace
 from calibre.utils.localization import _
 from polyglot.urllib import unquote
 
@@ -271,16 +271,46 @@ class FlowSplitter:
             if elem_id in all_page_break_ids:
                 ordered_ids[elem_id] = self.page_breaks[self.page_break_ids.index(elem_id)]
 
-        self.trees = [orig_tree]
+        # The last tree is split in place below. Work on a copy, as the item's data
+        # must not change if the file ends up as a single part.
+        self.trees = [copy.deepcopy(orig_tree)]
+        # Finding the break and splitting must not cost O(size of the whole
+        # remaining tree) per break, or books with many page breaks are
+        # quadratic. The last tree holds everything after the previous break
+        # and is split in place, with elements found via an id index.
+        id_index = None
         while ordered_ids:
             pb_id, (pattern, before) = next(iter(ordered_ids.items()))
             del ordered_ids[pb_id]
             for i in range(len(self.trees) - 1, -1, -1):
                 tree = self.trees[i]
-                elem = pattern(tree)
+                is_last = i == len(self.trees) - 1
+                if is_last:
+                    if id_index is None:
+                        id_index = {}
+                        for e in tree.getroot().iter('*'):
+                            eid = e.get('id')
+                            if eid is not None:
+                                id_index.setdefault(eid, []).append(e)
+                    root = tree.getroot()
+                    elem = []
+                    for e in id_index.get(pb_id, ()):
+                        p = e
+                        while p.getparent() is not None:
+                            p = p.getparent()
+                        if p is root:
+                            elem = [e]
+                            break
+                else:
+                    elem = pattern(tree)
                 if elem:
                     self.log.debug('\t\tSplitting on page-break at id={}'.format(elem[0].get('id')))
-                    before_tree, after_tree = self.do_split(tree, elem[0], before)
+                    result = do_split_inplace(tree, elem[0], self.log, before) if is_last else None
+                    if result is None:
+                        result = self.do_split(tree, elem[0], before)
+                        if is_last:
+                            id_index = None
+                    before_tree, after_tree = result
                     self.trees[i : i + 1] = [before_tree, after_tree]
                     break
 
@@ -348,6 +378,8 @@ class FlowSplitter:
             else:
                 ans.append(buf)
                 buf = part
+        if buf:
+            ans.append(buf)
         return ans
 
     def split_to_size(self, tree):
@@ -508,3 +540,28 @@ class FlowSplitter:
                     page.href = nhref
 
         self.oeb.manifest.remove(self.item)
+
+
+def find_tests():
+    import unittest
+
+    from calibre.utils.logging import Log
+
+    class SplitTest(unittest.TestCase):
+        def test_split_text_keeps_all_text(self):
+            splitter = FlowSplitter.__new__(FlowSplitter)
+            splitter.log = Log()
+            paras = [f'paragraph {i} ' + 'x' * 90 for i in range(100)]
+            frags = splitter.split_text('\n\n'.join(paras), None, 1000)
+            self.assertGreater(len(frags), 1)
+            joined = '\n\n'.join(frags)
+            for p in paras:
+                self.assertIn(p, joined)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(SplitTest)
+
+
+if __name__ == '__main__':
+    from calibre.utils.run_tests import run_tests
+
+    run_tests(find_tests)

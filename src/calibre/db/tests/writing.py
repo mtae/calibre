@@ -466,6 +466,60 @@ class WritingTest(BaseTest):
 
     # }}}
 
+    def test_restore_error_report(self):  # {{{
+        "Test that the traceback of each failed directory is reported once"
+        from calibre.db.restore import Restore
+        from calibre.ptempfile import TemporaryDirectory
+
+        class FailingRestore(Restore):
+            def scan_library(self):
+                raise Exception('Something bad happened')
+
+        with TemporaryDirectory() as tdir:
+            restorer = FailingRestore(tdir)
+            restorer.failed_dirs = [('dir1', 'traceback1'), ('dir2', 'traceback2')]
+            restorer.run()
+        for dirpath, tb in restorer.failed_dirs:
+            self.assertEqual(restorer.tb.count(f'Failed to restore: {dirpath}\n{tb}'), 1)
+
+    def test_restore_notes_in_transaction(self):  # {{{
+        "Test that restoring a library restores all the notes in one transaction, not with a commit for each note"
+        from calibre.db.backend import DB
+        from calibre.db.restore import Restore
+
+        cl = self.cloned_library
+        cache = self.init_cache(cl)
+        notes = {aid: f'a note for the author {aid}' for aid in sorted(cache.all_field_ids('authors'))[:2]}
+        for aid, doc in notes.items():
+            cache.set_notes_for('authors', aid, doc)
+        names = {aid: cache.get_item_name('authors', aid) for aid in notes}
+        cache.dump_metadata()
+        cache.close()
+        commits = []
+        orig = DB.restore_notes
+
+        def restore_notes(db, *args):
+            db.conn.set_commit_hook(lambda: (commits.append(1), False)[1])
+            try:
+                return orig(db, *args)
+            finally:
+                db.conn.set_commit_hook(None)
+
+        DB.restore_notes = restore_notes
+        try:
+            restorer = Restore(cl)
+            restorer.start()
+            restorer.join(60)
+        finally:
+            DB.restore_notes = orig
+        self.assertFalse(restorer.is_alive())
+        cache = self.init_cache(cl)
+        authors = {cache.get_item_name('authors', aid): aid for aid in cache.all_field_ids('authors')}
+        for aid, doc in notes.items():
+            self.assertEqual(cache.notes_for('authors', authors[names[aid]]), doc)
+        self.assertEqual(len(commits), 0, 'restoring the notes commits for every note')
+    # }}}
+
     def test_set_cover(self):  # {{{
         "Test setting of cover"
         cache = self.init_cache()
@@ -582,7 +636,12 @@ class WritingTest(BaseTest):
         self.assertEqual(cache.remove_items('#tags', (t,)), {1, 2})
 
         smap = cache.get_id_map('series')
+        # Book 2 has series index 1.0 already, so removing its series does not change anything else about it
+        self.assertEqual({1, 2}, cache.search('series:true'))
+        last_modified = cache.field_for('last_modified', 2)
         self.assertEqual(cache.remove_items('series', smap), {1, 2})
+        self.assertEqual(set(), cache.search('series:true'))
+        self.assertGreater(cache.field_for('last_modified', 2), last_modified)
         smap = cache.get_id_map('#series')
         s = {v: k for k, v in smap.items()}['My Series Two']
         self.assertEqual(cache.remove_items('#series', (s,)), {1})
@@ -1044,6 +1103,11 @@ class WritingTest(BaseTest):
         cache.set_annotations_for_book(1, 'moo', annot_list)
         amap = cache.annotations_map_for_book(1, 'moo')
         self.assertEqual(3, len(cache.all_annotations_for_book(1)))
+        # an unreadable annotation is skipped, not replaced by the one before it
+        raw = cache.backend.get("SELECT annot_data FROM annotations WHERE book=1 AND annot_id='1'", all=False)
+        cache.backend.execute("UPDATE annotations SET annot_data='{' WHERE book=1 AND annot_id='1'")
+        self.assertEqual(['bookmark', 'highlight'], [x['annotation']['type'] for x in cache.all_annotations_for_book(1)])
+        cache.backend.execute("UPDATE annotations SET annot_data=? WHERE book=1 AND annot_id='1'", (raw,))
         self.assertEqual([x[0] for x in annot_list], map_as_list(amap))
         self.assertFalse(cache.dirtied_cache)
         cache.check_dirtied_annotations()
@@ -1248,4 +1312,225 @@ class WritingTest(BaseTest):
         self.assertEqual({}, cache.get_link_map('publisher'), 'links on publisher were not deleted')
         self.assertEqual({}, cache.get_all_link_maps_for_book(1), 'Not all links for book were deleted')
 
+    # }}}
+
+    def test_id_map_lower_index(self):  # {{{
+        # The lowercase index of IdMap must always equal one built from scratch,
+        # whichever way the map was changed
+        import random
+
+        from calibre.db.tables import IdMap, safe_lower
+        rnd = random.Random(7)
+        names = ['a', 'A', 'b', 'B', 'Ünï', 'ünï', 'ÜNÏ', 'x y', 'X Y', 'z']
+        m = IdMap()
+        history = []
+        for step in range(400):
+            op = rnd.choice(('set', 'set', 'set', 'pop', 'del', 'update', 'setdefault', 'popitem', 'clear', 'lookup'))
+            key = rnd.randint(1, 12)
+            history.append((op, key))
+            if op == 'set':
+                m[key] = rnd.choice(names)
+            elif op == 'pop':
+                m.pop(key, None)
+            elif op == 'del':
+                if key in m:
+                    del m[key]
+            elif op == 'update':
+                m.update({key: rnd.choice(names), key + 1: rnd.choice(names)})
+            elif op == 'setdefault':
+                m.setdefault(key, rnd.choice(names))
+            elif op == 'popitem':
+                if m:
+                    m.popitem()
+            elif op == 'clear' and rnd.random() < 0.2:
+                m.clear()
+            expected = {safe_lower(v): k for k, v in m.items()}
+            if op == 'lookup' or rnd.random() < 0.5:
+                self.assertEqual(expected, m.lower_index(), f'index differs from rebuilt index at step {step} after {history[-5:]}')
+        import copy
+        self.assertIs(type(m.copy()), dict)
+        self.assertIs(type(copy.copy(m)), dict)
+        self.assertEqual(dict(m), m)
+    # }}}
+
+    def test_unused_items_removed_by_next_write(self):  # {{{
+        # Items nobody uses are removed by the first write to the field, whether
+        # they came from the database or from a write that failed part way,
+        # and later writes only need to look at the items they touch
+        cache = self.init_cache()
+        conn = cache.backend.conn
+        for name in ('orphan1', 'orphan2'):
+            conn.execute('INSERT INTO tags (name) VALUES (?)', (name,))
+        cache.reload_from_db()
+        t = cache.fields['tags'].table
+        self.assertEqual({'orphan1', 'orphan2'}, {v for v in t.id_map.values() if v.startswith('orphan')})
+        cache.set_field('tags', {1: 'newtag'})
+        self.assertFalse([v for v in t.id_map.values() if v.startswith('orphan')], 'unused items from the db were not removed')
+        self.assertFalse(t.unused_items_possible)
+        # Replacing the only use of an item removes it
+        cache.set_field('tags', {1: 'other'})
+        self.assertNotIn('newtag', t.id_map.values())
+        # An item left unused by a write that failed part way is removed by the next one
+        from calibre.db import write as w
+        orig = w.end_unused_items_cleanup
+        def boom(table):
+            raise RuntimeError('boom')
+        w.end_unused_items_cleanup = boom
+        try:
+            with self.assertRaises(RuntimeError):
+                cache.set_field('tags', {2: 'failed_tag'})
+        finally:
+            w.end_unused_items_cleanup = orig
+        self.assertTrue(t.unused_items_possible)
+        conn.execute('INSERT INTO tags (name) VALUES (?)', ('orphan3',))
+        iid = conn.last_insert_rowid()
+        t.id_map[iid] = 'orphan3'
+        t.col_book_map[iid] = set()
+        cache.set_field('tags', {3: 'fine'})
+        self.assertNotIn('orphan3', t.id_map.values(), 'unused item not removed after a failed write')
+        self.assertFalse(t.unused_items_possible)
+        self.assertEqual([], self.find_library_inconsistencies(cache))
+
+    def test_change_unit_of_work(self):  # {{{
+        cache = self.init_cache()
+        seen = []
+        cache.change_listeners.append(seen.append)
+        old = cache.field_for('tags', 1)
+        cache.set_field('tags', {1: ('t_new',)})
+        self.assertEqual(1, len(seen), 'listener not called once per committed change')
+        self.assertIn(1, seen[0].fields['tags'][0], 'record lacks the changed book')
+        self.assertTrue(seen[0].fields['tags'][1], 'record lacks the changed items')
+        # A failure rolls back the sql and the memory, and the listeners are not called
+        seen.clear()
+        real = cache.backend.executemany
+
+        def fail(sql, *a, **kw):
+            if 'books_tags_link' in sql and 'INSERT' in sql.upper():
+                raise ValueError('injected')
+            return real(sql, *a, **kw)
+
+        cache.backend.executemany = fail
+        try:
+            with self.assertRaises(ValueError):
+                cache.set_field('tags', {1: ('t_other',)})
+        finally:
+            del cache.backend.executemany
+        self.assertEqual([], seen, 'listener called for a failed change')
+        self.assertEqual(('t_new',), cache.field_for('tags', 1), 'memory kept a change that was rolled back')
+        self.assertEqual(('t_new',), self.init_cache(cache.backend.library_path).field_for('tags', 1), 'database differs from memory')
+        # Nested changes merge into the outermost one, which notifies once
+        with cache.write_lock:
+            with cache._change() as outer:
+                with cache._change() as inner:
+                    inner.touch('tags', (1,))
+                self.assertEqual([], seen)
+        self.assertEqual(1, len(seen))
+        self.assertIn(1, seen[0].fields['tags'][0])
+        # A nested change that fails and is caught by its parent has rolled itself back: nothing it registered may
+        # be run or reported when the parent commits
+        seen.clear()
+        ran = []
+        with cache.write_lock:
+            with cache._change() as outer:
+                try:
+                    with cache._change() as inner:
+                        inner.touch('tags', (2,))
+                        inner.after_commit(lambda: ran.append('child'))
+                        raise ValueError('child failed')
+                except ValueError:
+                    pass
+                outer.after_commit(lambda: ran.append('parent'))
+        self.assertEqual(['parent'], ran, 'after_commit callback of a failed nested change ran')
+        self.assertEqual(1, len(seen))
+        self.assertEqual({}, seen[0].fields, 'record reports fields of a failed nested change')
+        del old
+
+    # }}}
+
+    def test_change_invalidates_derived_caches(self):  # {{{
+        "Test that a committed change clears the composite and search caches for the books it touched, before the callbacks and listeners run"
+        cache = self.init_cache()
+        cache.create_custom_column('cc', 'CC', 'composite', False, display={'composite_template': '{title}'})
+        cache.close()
+        cache = self.init_cache()
+        title_table = cache.fields['title'].table
+
+        def edit_title(change, val):
+            # Changes the database and memory without clearing any cache, as a writer that does not would
+            cache.backend.execute('UPDATE books SET title=? WHERE id=1', (val,))
+            title_table.book_col_map[1] = val
+            change.modifies(title_table)
+            change.touch('title', (1,))
+
+        def observe(c):
+            return c.search('title:Changed'), c.search('title:Other'), c.field_for('#cc', 1)
+
+        # Fill the caches
+        old = cache.field_for('title', 1)
+        self.assertEqual((set(), set(), old), observe(cache))
+        seen = {}
+        cache.change_listeners.append(lambda record: seen.update(listener=observe(cache)))
+        with cache.write_lock:
+            with cache._change() as change:
+                edit_title(change, 'Changed')
+                change.after_commit(lambda: seen.update(callback=observe(cache)))
+        expected = ({1}, set(), 'Changed')
+        self.assertEqual(expected, observe(self.init_cache(cache.backend.library_path)), 'fresh cache differs')
+        self.assertEqual(expected, seen.get('callback'), 'after_commit callback saw stale caches')
+        self.assertEqual(expected, seen.get('listener'), 'change listener saw stale caches')
+        self.assertEqual(expected, observe(cache))
+        # A failed change clears them as well, caches filled from the memory it changed are not kept
+        del cache.change_listeners[:]
+        with self.assertRaises(ValueError):
+            with cache.write_lock:
+                with cache._change() as change:
+                    edit_title(change, 'Other')
+                    cache._clear_composite_caches((1,))
+                    cache._clear_search_caches((1,))
+                    self.assertEqual((set(), {1}, 'Other'), observe(cache))
+                    raise ValueError('failed')
+        self.assertEqual(expected, observe(cache), 'caches kept the values of a change that was rolled back')
+
+    def test_item_ids_match_db_after_changes(self):  # {{{
+        # Writing a field looks up the ids of items by name, which must give the
+        # same result as the database whatever happened to the items before
+        import random
+        cache = self.init_cache()
+        reader = self.init_cache()  # Reads what the db contains after every operation
+        fields = ('tags', 'authors', 'series', 'publisher')
+        names = ['Alpha', 'alpha', 'ALPHA', 'Béta', 'béta', 'Gamma', 'delta', 'Delta', 'Ünï', 'ünï', 'x, y', 'X, Y']
+        rnd = random.Random(11)
+        history = []
+        for step in range(150):
+            field = rnd.choice(fields)
+            multiple = field in ('tags', 'authors')
+            op = rnd.choice(('set', 'set', 'set', 'set_nocase', 'rename', 'remove_items', 'remove_book', 'add_book'))
+            book_ids = sorted(cache.all_book_ids())
+            history.append((op, field))
+            if op in ('set', 'set_nocase'):
+                bids = rnd.sample(book_ids, min(len(book_ids), rnd.randint(1, 3)))
+                vmap = {b: (rnd.sample(names, rnd.randint(1, 3)) if multiple else rnd.choice(names)) for b in bids}
+                cache.set_field(field, vmap, allow_case_change=op == 'set')
+            elif op == 'rename':
+                ids = sorted(cache.fields[field].table.id_map)
+                if ids:
+                    cache.rename_items(field, {rnd.choice(ids): rnd.choice(names)})
+            elif op == 'remove_items':
+                ids = sorted(cache.fields[field].table.id_map)
+                if ids and field != 'authors':  # Direct removal of authors is not allowed
+                    cache.remove_items(field, rnd.sample(ids, 1))
+            elif op == 'remove_book':
+                if len(book_ids) > 3:
+                    cache.remove_books([rnd.choice(book_ids)])
+            else:
+                mi = Metadata(rnd.choice(names), [rnd.choice(names), rnd.choice(names)])
+                mi.tags, mi.series, mi.publisher = rnd.sample(names, 2), rnd.choice(names), rnd.choice(names)
+                cache.create_book_entry(mi)
+            reader.reload_from_db()
+            for f in fields:
+                t, rt = cache.fields[f].table, reader.fields[f].table
+                where = f'field {f} at step {step} after {history[-4:]}'
+                self.assertEqual(dict(rt.id_map), dict(t.id_map), where)
+                self.assertEqual({k: v for k, v in rt.book_col_map.items() if v}, {k: v for k, v in t.book_col_map.items() if v}, where)
+                self.assertEqual({k: v for k, v in rt.col_book_map.items() if v}, {k: v for k, v in t.col_book_map.items() if v}, where)
     # }}}

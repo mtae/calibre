@@ -199,6 +199,7 @@ class ConverseWidget(QWidget):
 
         self.current_api_call_number = 0
         self.session_cost = 0.0
+        self.session_cost_base = 0.0  # cost of the finished conversations
         self.session_cost_currency = ''
         self.streaming_render_timer = t = QTimer(self)
         t.setSingleShot(True)
@@ -414,6 +415,7 @@ class ConverseWidget(QWidget):
         self.result_display.show_message(html, details, level)
 
     def clear_current_conversation(self) -> None:
+        self.session_cost_base = self.session_cost
         self.conversation_history = ConversationHistory()
         self.streaming_render_timer.stop()
 
@@ -431,10 +433,10 @@ class ConverseWidget(QWidget):
     def update_cost(self):
         h = self.conversation_history
         if self.session_cost_currency != h.currency:
-            self.session_cost = 0
+            self.session_cost = self.session_cost_base = 0
             self.session_cost_currency = h.currency
         if self.session_cost_currency:
-            self.session_cost += h.cost
+            self.session_cost = self.session_cost_base + h.cost  # h.cost is cumulative for the conversation
             cost = _('free')
             if self.session_cost:
                 cost = f'{self.session_cost:.6f}'.rstrip('0').rstrip('.') + f' {self.session_cost_currency}'
@@ -998,6 +1000,42 @@ class StreamingRenderDemo(QDialog):
             Final paragraph for more vertical movement in the viewport.
         ''').strip()
         return '\n\n'.join(block for _ in range(3))
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    class TestSessionCost(unittest.TestCase):
+        def test_session_cost(self):
+            w = SimpleNamespace(
+                session_cost=0.0, session_cost_currency='', current_api_call_number=0, api_usage_label=MagicMock(), streaming_render_timer=MagicMock()
+            )
+            ConverseWidget.clear_current_conversation(w)
+
+            def respond(cost, currency='USD'):
+                # ConversationHistory.cost is cumulative for the conversation
+                w.conversation_history.cost += cost
+                w.conversation_history.currency = currency
+                w.current_api_call_number += 1
+                ConverseWidget.update_cost(w)
+
+            respond(1)
+            self.assertAlmostEqual(w.session_cost, 1)
+            respond(2)
+            self.assertAlmostEqual(w.session_cost, 3, msg='follow-up questions must not re-add the earlier cost')
+            respond(3)
+            self.assertAlmostEqual(w.session_cost, 6)
+            ConverseWidget.clear_current_conversation(w)
+            respond(4)
+            self.assertAlmostEqual(w.session_cost, 10, msg='a new conversation must add to the session total')
+            ConverseWidget.clear_current_conversation(w)
+            respond(5, 'EUR')
+            self.assertAlmostEqual(w.session_cost, 5, msg='changing currency must restart the session total')
+            self.assertEqual(w.session_cost_currency, 'EUR')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestSessionCost)
 
 
 def develop(auto_close: bool = False):

@@ -9,6 +9,7 @@ from io import BytesIO
 
 from calibre import as_unicode, sanitize_file_name
 from calibre.db.cli import module_for_cmd
+from calibre.db.errors import BooksNotRemoved
 from calibre.ebooks.metadata.meta import get_metadata
 from calibre.srv.changes import books_added, books_deleted, metadata
 from calibre.srv.errors import HTTPBadRequest, HTTPForbidden, HTTPNotFound
@@ -136,7 +137,14 @@ def cdb_delete_book(ctx, rd, book_ids, library_id):
         ids = {int(x) for x in book_ids.split(',')}
     except Exception:
         raise HTTPBadRequest(f'invalid book_ids: {book_ids}')
-    db.remove_books(ids)
+    try:
+        db.remove_books(ids)
+    except BooksNotRemoved as e:
+        # Some books were removed, make sure that the clients, such as the
+        # calibre GUI, know about them
+        if e.removed:
+            ctx.notify_changes(db.backend.library_path, books_deleted(e.removed))
+        raise
     ctx.notify_changes(db.backend.library_path, books_deleted(ids))
     return {}
 

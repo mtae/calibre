@@ -264,6 +264,21 @@ class ContainerTests(BaseTest):
         merge(c, 'styles', ('stylesheet.css', 'page_styles.css'), 'stylesheet.css')
         self.check_links(c)
 
+    def test_merge_file_duplicate_ids(self):
+        "Test that merging files with the same id in all of them keeps ids unique"
+        c = get_container(get_split_book())
+        names = 'one.html', 'two.html', 'three.html'
+        for name in names:
+            c.add_file(name, f'<head><p id="fn">{name}</p><a href="#fn">{name}</a>'.encode())
+        merge(c, 'text', names, names[0])
+        root = c.parsed(names[0])
+        ids = root.xpath('//*/@id')
+        self.assertEqual(len(ids), len(set(ids)))
+        links = list(root.iter('{*}a'))
+        self.assertEqual(len(links), len(names))
+        for a in links:
+            self.assertEqual(a.text, root.xpath('//*[@id=$id]', id=a.get('href')[1:])[0].text)
+
     def test_dir_container(self):
         def create_book(source):
             with ZipFile(P('quick_start/eng.epub', allow_user_override=False)) as zf:

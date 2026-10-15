@@ -228,14 +228,10 @@ class DisplayedFields(QAbstractListModel):
             delta = -row if row + delta < 0 else delta
         row = idx.row() + delta
         if row >= 0 and row < len(self.fields):
-            t = self.fields[row]
-            self.fields[row] = self.fields[row - delta]
-            self.fields[row - delta] = t
-            self.dataChanged.emit(idx, idx)
-            idx = self.index(row)
-            self.dataChanged.emit(idx, idx)
+            self.fields.insert(row, self.fields.pop(row - delta))
+            self.dataChanged.emit(self.index(min(row, row - delta)), self.index(max(row, row - delta)))
             self.changed = True
-            return idx
+            return self.index(row)
 
 
 class RulesSetting(Setting):
@@ -686,3 +682,29 @@ def selected_rows_metadatas():
     except Exception:
         pass
     return rslt
+
+
+def find_tests():
+    import unittest
+
+    class TestDisplayedFields(unittest.TestCase):
+        def test_move_fields(self):
+            model = DisplayedFields(None)
+            changed = []
+            model.dataChanged.connect(lambda first, last, *a: changed.append((first.row(), last.row())))
+
+            def move(start, row, delta):
+                model.fields = [[x, True] for x in start]
+                del changed[:]
+                idx = model.move(model.index(row), delta)
+                return ''.join(f for f, v in model.fields), idx.row()
+
+            self.assertEqual(move('abcdef', 2, -1), ('acbdef', 1))
+            self.assertEqual(move('abcdef', 1, 2), ('acdbef', 3))
+            self.assertEqual(changed, [(1, 3)])
+            self.assertEqual(move('abcdef', 0, 5), ('bcdefa', 5), 'only the moved field changes position')
+            self.assertEqual(move('abcdef', 5, -5), ('fabcde', 0))
+            self.assertEqual(move('abcdef', 4, 10), ('abcdfe', 5), 'moves past the end are clamped')
+            self.assertEqual(move('abcdef', 1, -10), ('bacdef', 0), 'moves past the start are clamped')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestDisplayedFields)

@@ -274,9 +274,39 @@ class GroupKeysListTest(unittest.TestCase):
         self.assertEqual(sorted(labels), ['Alice', 'Bob'])
 
 
+class ShowNextTest(unittest.TestCase):
+    def test_show_next_from_group_header(self):
+        from qt.core import Qt, QTreeWidgetItem
+
+        from calibre.gui2.library.annotations import ResultsList
+
+        results = []
+        for i in range(3):
+            item = QTreeWidgetItem()
+            item.setData(0, Qt.ItemDataRole.UserRole, _make_result(annot_id=i))
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, i)
+            results.append(item)
+        header = QTreeWidgetItem()
+        header.setData(0, Qt.ItemDataRole.UserRole, 'group-key')
+        lst = MagicMock()
+        lst.number_of_results = len(results)
+        lst.item_map = results
+        lst.currentItem.return_value = header
+        ResultsList.show_next(lst)
+        lst.setCurrentItem.assert_called_with(results[0])
+        ResultsList.show_next(lst, backwards=True)
+        lst.setCurrentItem.assert_called_with(results[-1])
+        lst.currentItem.return_value = results[1]
+        ResultsList.show_next(lst)
+        lst.setCurrentItem.assert_called_with(results[2])
+        ResultsList.show_next(lst, backwards=True)
+        lst.setCurrentItem.assert_called_with(results[0])
+
+
 def find_tests():
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(GroupKeyTest))
     suite.addTests(loader.loadTestsFromTestCase(GroupKeysListTest))
+    suite.addTests(loader.loadTestsFromTestCase(ShowNextTest))
     return suite

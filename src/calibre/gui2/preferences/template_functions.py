@@ -565,6 +565,7 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
                     _('The name {} is already used by a template function').format(name),
                     show=True,
                 )
+                return
         try:
             prog = str(self.te_textbox.toPlainText())
             if not prog.startswith(('program:', 'python:')):
@@ -574,6 +575,7 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
                     _("The stored template must begin with '{0}' or '{1}'").format('program:', 'python:'),
                     show=True,
                 )
+                return
 
             cls = compile_user_function(name, str(self.template_editor.new_doc.toPlainText()), 0, prog)
             self.st_funcs[name] = cls
@@ -654,6 +656,50 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
         self.gui.library_view.model().research()
         load_user_template_functions(self.db.library_id, [], funcs)
         return False
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    def text(x):
+        return SimpleNamespace(toPlainText=lambda: x, currentText=lambda: x)
+
+    class TestStoredTemplates(unittest.TestCase):
+        def test_create_without_template_prefix(self):
+            this = SimpleNamespace(
+                gui=None,
+                changed_signal=SimpleNamespace(emit=lambda: None),
+                te_name=text('test_create_func'),
+                te_textbox=text('def evaluate(self, formatter, kwargs, mi, locals):\n    return ""'),
+                template_editor=SimpleNamespace(new_doc=text('')),
+                st_funcs={},
+                st_build_function_names_box=lambda **kw: None,
+            )
+            with patch(f'{__name__}.error_dialog') as error, patch(f'{__name__}.compile_user_function') as compile_func:
+                ConfigWidget.st_create_button_clicked(this)
+            self.assertEqual(error.call_count, 1)
+            compile_func.assert_not_called()
+            self.assertEqual(this.st_funcs, {})
+
+        def test_create_with_template_function_name(self):
+            this = SimpleNamespace(
+                gui=None,
+                changed_signal=SimpleNamespace(emit=lambda: None),
+                te_name=text('strcat'),
+                te_textbox=text('program: 1'),
+                template_editor=SimpleNamespace(new_doc=text('')),
+                st_funcs={},
+                st_build_function_names_box=lambda **kw: None,
+            )
+            with patch(f'{__name__}.error_dialog') as error, patch(f'{__name__}.compile_user_function') as compile_func:
+                ConfigWidget.st_create_button_clicked(this)
+            self.assertEqual(error.call_count, 1)
+            compile_func.assert_not_called()
+            self.assertEqual(this.st_funcs, {})
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestStoredTemplates)
 
 
 if __name__ == '__main__':

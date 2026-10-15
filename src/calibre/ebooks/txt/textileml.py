@@ -249,7 +249,10 @@ class TextileMLizer(OEB2HTML):
 
         # Soft scene breaks.
         if 'margin-top' in style.cssdict() and style['margin-top'] != 'auto':
-            ems = min(int(round(float(style.marginTop) / style.fontSize) - 1), self.MAX_EM)
+            try:
+                ems = min(int(round(float(style.marginTop) / style.fontSize) - 1), self.MAX_EM)
+            except Exception:  # e.g. calc() margins or a zero font size
+                ems = 0
             if ems >= 1:
                 text.append('\n\n\xa0' * ems)
 
@@ -304,7 +307,7 @@ class TextileMLizer(OEB2HTML):
         if tag == 'blockquote':
             text.append('\nbq. ')
             tags.append('\n')
-        elif tag in ('abbr', 'acronym'):
+        elif tag in ('abbr', 'acronym') and 'title' in attribs:
             text.append('')
             txt = attribs['title']
             tags.append('(' + txt + ')')
@@ -330,7 +333,7 @@ class TextileMLizer(OEB2HTML):
         elif tag == 'pre':
             self.in_pre = True
             text.append('\npre. ')
-            tags.append('pre\n')
+            tags.append('pre')
         elif tag == 'a':
             if self.opts.keep_links:
                 if 'href' in attribs:
@@ -479,6 +482,8 @@ class TextileMLizer(OEB2HTML):
             if t in ('pre', 'ul', 'ol', 'li', 'table'):
                 if t == 'pre':
                     self.in_pre = False
+                    # A blank line ends a pre. block
+                    text.append('\n')
                 elif t in ('ul', 'ol'):
                     if self.list:
                         self.list.pop()
@@ -506,7 +511,10 @@ class TextileMLizer(OEB2HTML):
 
         # Soft scene breaks.
         if 'margin-bottom' in style.cssdict() and style['margin-bottom'] != 'auto':
-            ems = min(round((float(style.marginBottom) / style.fontSize) - 1), self.MAX_EM)
+            try:
+                ems = min(round((float(style.marginBottom) / style.fontSize) - 1), self.MAX_EM)
+            except Exception:  # e.g. calc() margins or a zero font size
+                ems = 0
             if ems >= 1:
                 text.append('\n\n\xa0' * ems)
 

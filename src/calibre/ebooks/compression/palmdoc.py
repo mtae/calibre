@@ -42,7 +42,7 @@ def py_compress_doc(data):
         ch = data[i : i + 1]
         och = ord(ch)
         i += 1
-        if ch == b' ' and (i + 1) < ldata:
+        if ch == b' ' and i < ldata:
             onch = ord(data[i : i + 1])
             if onch >= 0x40 and onch < 0x80:
                 out.write(pack('>B', onch ^ 0x80))
@@ -78,6 +78,57 @@ def find_tests():
                 b'0123456789asd0123456789asd|yyzzxxffhhjjkk',
                 (b'ciewacnaq eiu743 r787q 0w%  ; sa fd\xef\ffdxosac wocjp acoiecowei owaic jociowapjcivcjpoivjporeivjpoavca; p9aw8743y6r74%$^$^%8 '),
             ]:
+                x = compress_doc(test)
+                self.assertEqual(py_compress_doc(test), x)
+                self.assertEqual(decompress_doc(x), test)
+
+        def test_palmdoc_space_and_char_at_end(self):
+            # A space followed by a character in 0x40-0x7F is packed into a
+            # single byte, also when that character is the last byte of the input
+            prefix = b'0123456789abcdefg'  # more than 10 bytes, so that the repeat search is enabled
+            for tail, expected in [
+                (b' A', b'\xc1'),
+                (b' @', b'\xc0'),
+                (b' \x7f', b'\xff'),
+                (b' ?', b' ?'),  # not in 0x40-0x7F
+                (b' \x80', b' \x01\x80'),
+                (b' ', b' '),
+                (b'  A', b' \xc1'),
+            ]:
+                test = prefix + tail
+                x = compress_doc(test)
+                self.assertEqual(x, prefix + expected, f'compress_doc({test!r})')
+                self.assertEqual(py_compress_doc(test), x, f'py_compress_doc({test!r})')
+                self.assertEqual(decompress_doc(x), test)
+
+        def test_palmdoc_python_matches_c(self):
+            import random
+
+            rnd = random.Random(0)
+            alphabet = [b' ', b' ', b'A', b'a', b'@', b'\x7f', b'\x80', b'\x00', b'\x03', b'z', b'\xff', b'?']
+            for i in range(2000):
+                test = b''.join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 60)))
+                x = compress_doc(test)
+                self.assertEqual(py_compress_doc(test), x, f'py_compress_doc({test!r})')
+                self.assertEqual(decompress_doc(x), test)
+        def test_palmdoc_compression_matches_reference(self):
+            # The match finder in the C implementation must find the same
+            # matches as the simple search in py_compress_doc, in particular
+            # for repeated data and for repeats near the maximum distance.
+            import random
+
+            rnd = random.Random(0)
+            tests = []
+            for alphabet in (2, 3, 4, 16, 200):
+                for size in (50, 500, 2500, 4096):
+                    tests.append(bytes(rnd.randrange(1, alphabet + 1) for _ in range(size)))
+            for gap in range(2040, 2056):
+                base = bytes(rnd.randrange(32, 127) for _ in range(12))
+                filler = bytes(rnd.randrange(128, 255) for _ in range(gap - 12))
+                tests.append(base + filler + base + b'tail')
+            tests.append(b'abcdefghij' * 700)
+            tests.append(b'\0' * 5000)
+            for test in tests:
                 x = compress_doc(test)
                 self.assertEqual(py_compress_doc(test), x)
                 self.assertEqual(decompress_doc(x), test)

@@ -2,8 +2,6 @@
 # License: GPLv3 Copyright: 2011, Kovid Goyal <kovid@kovidgoyal.net>
 
 import io
-import random
-import time
 from struct import pack
 from typing import cast
 
@@ -14,6 +12,7 @@ from calibre.ebooks.mobi.utils import RECORD_SIZE, align_block, create_text_reco
 from calibre.ebooks.mobi.writer2 import PALMDOC, UNCOMPRESSED
 from calibre.ebooks.mobi.writer2.indexer import Indexer
 from calibre.ebooks.mobi.writer2.serializer import Serializer
+from calibre.ebooks.oeb.reproducible import epoch_seconds, random_uint32
 from calibre.utils.filenames import ascii_filename
 
 # Disabled as I don't care about uncrossable breaks
@@ -242,7 +241,7 @@ class MobiWriter:
                 0,  # Unused
             )
         )  # 0 - 15 (0x0 - 0xf)
-        uid = random.randint(0, 0xFFFFFFFF)
+        uid = random_uint32()
         title = normalize(str(metadata.title[0])).encode('utf-8')
 
         # 0x0 - 0x3
@@ -461,7 +460,7 @@ class MobiWriter:
             title = title.encode('ascii')
         title = title[:31]
         title = title + (b'\0' * (32 - len(title)))
-        now = int(time.time())
+        now = epoch_seconds()
         nrecords = len(self.records)
         self.write(
             title,

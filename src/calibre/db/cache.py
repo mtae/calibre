@@ -27,9 +27,10 @@ from calibre.customize.ui import run_plugins_on_import, run_plugins_on_postadd, 
 from calibre.db import SPOOL_SIZE, _get_next_series_num_for_list
 from calibre.db.annotations import merge_annotations
 from calibre.db.book_storage import BookStorageEntry
+from calibre.db.change import ChangeRecord
 from calibre.db.categories import CategoriesCache, CategoriesInvalidatingLock, get_categories, items_of_books
 from calibre.db.constants import COVER_FILE_NAME, DATA_DIR_NAME, NOTES_DIR_NAME, Pages
-from calibre.db.errors import NoSuchBook, NoSuchFormat
+from calibre.db.errors import BooksNotRemoved, NoSuchBook, NoSuchFormat
 from calibre.db.fields import IDENTITY, InvalidLinkTable, create_field
 from calibre.db.lazy import FormatMetadata, FormatsList, ProxyMetadata
 from calibre.db.listeners import EventDispatcher, EventType
@@ -198,6 +199,8 @@ class Cache:
         self.format_metadata_cache = defaultdict(dict)
         self.formatter_template_cache = {}
         self.dirtied_cache = {}
+        self._active_change = None
+        self.change_listeners = []  # called with the ChangeRecord after each outermost _change() commits
         self.link_maps_cache = {}
         self.extra_files_cache = {}
         self.vls_for_books_cache = None
@@ -323,9 +326,11 @@ class Cache:
     @quiet_write_api
     def clear_search_caches(self, book_ids=None):
         self.clear_search_cache_count += 1
-        self._search_api.update_or_clear(self, book_ids)
+        # Discard the cache of the virtual libraries of books first: refreshing the cached searches renders composite columns of the
+        # changed books, which must not use the old cache for {virtual_libraries}
         self.vls_for_books_cache = None
         self.vls_for_books_lib_in_process = None
+        self._search_api.update_or_clear(self, book_ids)
 
     _clear_search_caches = clear_search_caches
 
@@ -834,8 +839,9 @@ class Cache:
         references resources their hashes must be present in resource_hashes. Set remove_unused_resources to True to cleanup unused
         resources, note that updating a note automatically cleans up resources pertaining to that note anyway.
         """
-        ans = self.backend.set_notes_for(field, item_id, doc, searchable_text, resource_hashes, remove_unused_resources)
-        self.event_dispatcher(EventType.notes_changed, field, frozenset({item_id}))
+        with self._change() as change:
+            ans = self.backend.set_notes_for(field, item_id, doc, searchable_text, resource_hashes, remove_unused_resources)
+            change.after_commit(partial(self.event_dispatcher, EventType.notes_changed, field, frozenset({item_id})))
         return ans
 
     _set_notes_for = set_notes_for
@@ -864,8 +870,9 @@ class Cache:
     @quiet_write_api
     def unretire_note_for(self, field, item_id) -> int:
         "Unretire a previously retired note for the specified item. Notes are retired when an item is removed from the database"
-        ans = self.backend.unretire_note_for(field, item_id)
-        self.event_dispatcher(EventType.notes_changed, field, frozenset({item_id}))
+        with self._change() as change:
+            ans = self.backend.unretire_note_for(field, item_id)
+            change.after_commit(partial(self.event_dispatcher, EventType.notes_changed, field, frozenset({item_id})))
         return ans
 
     _unretire_note_for = unretire_note_for
@@ -893,8 +900,9 @@ class Cache:
                 except AttributeError:
                     ctime, mtime = st.st_ctime, st.st_mtime  # type: ignore
             basedir = os.path.dirname(os.path.abspath(path_to_html_file))
-        ans = self.backend.import_note(field, item_id, html, basedir, ctime, mtime)
-        self.event_dispatcher(EventType.notes_changed, field, frozenset({item_id}))
+        with self._change() as change:
+            ans = self.backend.import_note(field, item_id, html, basedir, ctime, mtime)
+            change.after_commit(partial(self.event_dispatcher, EventType.notes_changed, field, frozenset({item_id})))
         return ans
 
     _import_note = import_note
@@ -1630,11 +1638,30 @@ class Cache:
         except Exception:
             return False
         if self.backend.is_format_accessible(book_id, original_fmt, ofmt_name, path):
-            self.add_format(book_id, fmt, BytesIO(), run_hooks=False)
-            fmt_name = self.fields['formats'].format_fname(book_id, fmt)
-            file_size = self.backend.rename_format_file(book_id, ofmt_name, original_fmt, fmt_name, fmt, path)
-            self.fields['formats'].table.update_fmt(book_id, fmt, fmt_name, file_size, self.backend)
-            self._remove_formats({book_id: (original_fmt,)})
+            ofmt_path = self.backend.format_abspath(book_id, original_fmt, ofmt_name, path)
+            try:
+                name = self.fields['formats'].format_fname(book_id, fmt)
+            except Exception:
+                name = None
+            self.format_metadata_cache[book_id].pop(fmt, None)
+            self.format_metadata_cache[book_id].pop(original_fmt, None)
+            with self._change() as change:
+                change.modifies(self.fields['last_modified'].table)
+                # The original file is moved over the format (renaming the existing file to the name of the format first, as add_format() does)
+                # only after the rows are committed, so that a failure leaves both files where they were
+                size, fname = self._do_add_format(book_id, fmt, ofmt_path, name, change=change)
+                self._record_format_added(book_id, fmt, fname, size, change)
+                self._update_last_modified((book_id,))
+                self._queue_pages_scan(book_id)
+                # Code running inside this change (rendering composite columns, cached searches, reading format metadata)
+                # still sees the old file and caches that, discard those values again once the original is in place
+                change.after_commit(lambda: self.format_metadata_cache[book_id].pop(fmt, None))
+                change.after_commit(lambda: self.format_metadata_cache[book_id].pop(original_fmt, None))
+                change.after_commit(partial(self._clear_composite_caches, (book_id,)))
+                change.after_commit(partial(self._clear_search_caches, (book_id,)))
+                change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
+                # The file of the original format was moved above, so only its record is removed
+                self._remove_formats({book_id: (original_fmt,)}, db_only=True)
             return True
         return False
 
@@ -1966,6 +1993,86 @@ class Cache:
 
     _check_dirtied_annotations = check_dirtied_annotations
 
+    @contextmanager
+    def _change(self):
+        """
+        The unit of work of the write path, see calibre.db.change for the design. Must be used with the write lock held.
+        Yields the ChangeRecord to be filled in by the write code.
+        """
+        parent = self._active_change
+        record = self._active_change = ChangeRecord()
+        try:
+            with self.backend.notes.deferred_file_operations(), self.backend.conn:
+                yield record
+        except BaseException:
+            try:
+                self._rollback_change(record)
+            finally:
+                self._active_change = parent
+                if parent is not None:
+                    # The failed change has rolled itself back. A parent that catches the error and commits must not
+                    # run or report what the failed change registered, so only the tables are passed on (they are
+                    # re-read again if the parent fails as well).
+                    parent.tables.update(record.tables)
+            raise
+        self._active_change = parent
+        if parent is not None:
+            parent.merge(record)
+        else:
+            self._apply_change(record)
+
+    def _rollback_change(self, record):
+        # The SQL was rolled back by the transaction, make the in memory state and the files match it
+        books = record.book_ids or None
+        try:
+            size_table = self.backend.tables['size']
+            for table in record.tables.values():
+                if table is not size_table:
+                    self.backend._read_table(table, table.read, self.backend)
+            if size_table in record.tables.values():
+                # Read from the scan of the data table done by the formats table when it was re-read
+                self.backend._read_table(size_table, self.backend._read_size_table)
+        finally:
+            for func in record.rollback_callbacks:
+                try:
+                    func()
+                except Exception:
+                    traceback.print_exc()
+            for name in record.fields:
+                self.categories_cache.field_changed(name)
+            self.clear_link_map_cache(books)
+            if self.composites:
+                self._clear_composite_caches(books)
+            self._clear_search_caches(books)
+
+    def _invalidate_derived(self, record):
+        # The caches derived from the books (rendered composite columns, cached searches and the virtual libraries of
+        # books) are cleared for the books the change touched. This is the twin of what _rollback_change() does for a
+        # failed change, so that a write that changes the state of a book after, or without, an explicit clear leaves
+        # no stale cache. Runs before the callbacks and the listeners so that they see consistent caches.
+        books = record.book_ids
+        if books:
+            if self.composites:
+                self._clear_composite_caches(books)
+            self._clear_search_caches(books)
+
+    def _apply_change(self, record):
+        error = None
+        self._invalidate_derived(record)
+        for name, (books, items, report_books) in record.fields.items():
+            self.categories_cache.field_changed(name, items, books if report_books else None)
+        calls = [*record.callbacks, *(partial(listener, record) for listener in self.change_listeners)]
+        for func in calls:
+            try:
+                func()
+            except Exception as e:
+                if error is None:
+                    error = e
+                else:
+                    traceback.print_exc()
+        if error is not None:
+            raise error
+
     @quiet_write_api
     def set_field(self, name, book_id_to_val_map, allow_case_change=True, do_path_update=True):
         """
@@ -2006,31 +2113,36 @@ class Cache:
         # cached categories can be refreshed without recomputing every item.
         # Only fields with items can be categories, or be depended on by them.
         touched_items = items_of_books(f.table.book_col_map, book_id_to_val_map) if f.is_many else None
-        try:
+        with self._change() as change:
+            change.modifies(f.table, self.fields['last_modified'].table)
+            if name == 'title':
+                change.modifies(self.fields['sort'].table)
+            elif name == 'authors':
+                change.modifies(self.fields['author_sort'].table)
+            if is_series:
+                sf = self.fields[f.name + '_index']
+                change.modifies(sf.table)
+            # Until the writer reports the books it changed this is all that is known
+            change.touch(name, book_id_to_val_map.keys(), (), f.is_many)
             dirtied = f.writer.set_books(book_id_to_val_map, self.backend, allow_case_change=allow_case_change)
-        except Exception:
-            # The in memory tables may have been changed before the failure, so
-            # the cached categories must not be refreshed incrementally
-            self.categories_cache.field_changed(name)
-            raise
-        if f.is_many:
-            items_of_books(f.table.book_col_map, book_id_to_val_map, touched_items)
-            # A case change also affects the books of the renamed item, which
-            # are in dirtied
-            self.categories_cache.field_changed(name, touched_items, dirtied | book_id_to_val_map.keys())
-        else:
-            self.categories_cache.field_changed(name)
+            if f.is_many:
+                items_of_books(f.table.book_col_map, book_id_to_val_map, touched_items)
+                # A case change also affects the books of the renamed item, which
+                # are in dirtied
+                change.touch(name, dirtied | book_id_to_val_map.keys(), touched_items)
+            else:
+                change.touch(name, dirtied | book_id_to_val_map.keys(), None, False)
 
-        if is_series and simap:
-            sf = self.fields[f.name + '_index']
-            dirtied |= sf.writer.set_books(simap, self.backend, allow_case_change=False)
+            if is_series and simap:
+                dirtied |= sf.writer.set_books(simap, self.backend, allow_case_change=False)
 
-        if dirtied:
-            if update_path and do_path_update:
-                self._update_path(dirtied, mark_as_dirtied=False)
-            self._mark_as_dirty(dirtied)
-            self._clear_link_map_cache(dirtied)
-            self.event_dispatcher(EventType.metadata_changed, name, dirtied)
+            if dirtied:
+                self._mark_as_dirty(dirtied)
+                if update_path and do_path_update:
+                    # The folders of the books are staged in the change and the old ones removed after the commit
+                    self._update_path_in_change(change, dirtied, mark_as_dirtied=False)
+                change.after_commit(partial(self._clear_link_map_cache, dirtied))
+                change.after_commit(partial(self.event_dispatcher, EventType.metadata_changed, name, dirtied))
         return dirtied
 
     _set_field = set_field
@@ -2145,19 +2257,26 @@ class Cache:
 
     @quiet_write_api
     def update_path(self, book_ids, mark_as_dirtied=True):
+        with self._change() as change:
+            self._update_path_in_change(change, book_ids, mark_as_dirtied)
+
+    _update_path = update_path
+
+    def _update_path_in_change(self, change, book_ids, mark_as_dirtied=True):
+        "Move the folders of the books to match their titles and authors, as part of the change (see Backend.update_path())"
+        change.modifies(self.fields['path'].table, self.fields['formats'].table, self.fields['size'].table)
+        change.touch('path', book_ids, None, False)
         for book_id in book_ids:
             title = self._field_for('title', book_id, default_value=_('Unknown'))
             try:
                 author = self._field_for('authors', book_id, default_value=(_('Unknown'),))[0]
             except IndexError:
                 author = _('Unknown')
-            self.backend.update_path(book_id, title, author, self.fields['path'], self.fields['formats'])
+            self.backend.update_path(book_id, title, author, self.fields['path'], self.fields['formats'], change=change)
             self.format_metadata_cache.pop(book_id, None)
-            if mark_as_dirtied:
-                self._mark_as_dirty(book_ids)
-            self._clear_link_map_cache(book_ids)
-
-    _update_path = update_path
+        if mark_as_dirtied:
+            self._mark_as_dirty(book_ids)
+        change.after_commit(partial(self._clear_link_map_cache, book_ids))
 
     @read_api
     def get_a_dirtied_book(self):
@@ -2282,17 +2401,23 @@ class Cache:
         QPixmap, file object or bytestring. It can also be None, in which
         case any existing cover is removed."""
 
-        for book_id, data in book_id_data_map.items():
-            try:
-                path = self._get_book_path(book_id)
-            except KeyError, AttributeError:
-                self._update_path((book_id,))
-                path = self._get_book_path(book_id)
+        with self._change() as change:
+            # The cover files are staged and only replaced (or removed) after has_cover is committed
+            for book_id, data in book_id_data_map.items():
+                try:
+                    path = self._get_book_path(book_id)
+                except KeyError, AttributeError:
+                    self._update_path((book_id,))
+                    path = self._get_book_path(book_id)
 
-            self.backend.set_cover(book_id, path, data)
+                self.backend.set_cover(book_id, path, data, change=change)
+            # After the cover files were replaced
+            change.after_commit(partial(self._invalidate_cover_caches, tuple(book_id_data_map)))
+            return self._set_field('cover', {book_id: (0 if data is None else 1) for book_id, data in book_id_data_map.items()})
+
+    def _invalidate_cover_caches(self, book_ids):
         for cc in self.cover_caches:
-            cc.invalidate(book_id_data_map)
-        return self._set_field('cover', {book_id: (0 if data is None else 1) for book_id, data in book_id_data_map.items()})
+            cc.invalidate(book_ids)
 
     _set_cover = set_cover
 
@@ -2345,49 +2470,52 @@ class Cache:
         def set_field(name, val):
             dirtied.update(self._set_field(name, {book_id: val}, do_path_update=False, allow_case_change=allow_case_change))
 
-        path_changed = False
-        if set_title and mi.title:
-            path_changed = True
-            set_field('title', mi.title)
-        authors_changed = False
-        if set_authors:
-            path_changed = True
-            if not mi.authors:
-                mi.authors = [_('Unknown')]
-            authors = []
-            for a in mi.authors:
-                authors += string_to_authors(a)
-            set_field('authors', authors)
-            authors_changed = True
-
-        if path_changed:
-            self._update_path({book_id})
-
-        def protected_set_field(name, val):
-            try:
-                set_field(name, val)
-            except Exception:
-                if ignore_errors:
-                    traceback.print_exc()
-                else:
-                    raise
-
-        # force_changes has no effect on cover manipulation
         try:
-            cdata = mi.cover_data[1]
-            if cdata is None and isinstance(mi.cover, (str, bytes)) and mi.cover and os.access(mi.cover, os.R_OK):
-                with open(mi.cover, 'rb') as f:
-                    cdata = f.read() or None
-            if cdata is not None:
-                self._set_cover({book_id: cdata})
-        except Exception:
-            if ignore_errors:
-                traceback.print_exc()
-            else:
-                raise
+            # One change for the title, authors, folder, cover and the other fields: its transaction is committed at the end, the files
+            # of the notes of unused items, the old folder and the replaced cover files are only touched after the commit
+            with self._change() as change:
+                path_changed = False
+                if set_title and mi.title:
+                    path_changed = True
+                    set_field('title', mi.title)
+                authors_changed = False
+                if set_authors:
+                    path_changed = True
+                    if not mi.authors:
+                        mi.authors = [_('Unknown')]
+                    authors = []
+                    for a in mi.authors:
+                        authors += string_to_authors(a)
+                    set_field('authors', authors)
+                    authors_changed = True
 
-        try:
-            with self.backend.conn:  # Speed up set_metadata by not operating in autocommit mode
+                if path_changed:
+                    # The folder is staged in the change and the old one removed after the commit
+                    self._update_path_in_change(change, {book_id})
+
+                def protected_set_field(name, val):
+                    try:
+                        set_field(name, val)
+                    except Exception:
+                        if ignore_errors:
+                            traceback.print_exc()
+                        else:
+                            raise
+
+                # force_changes has no effect on cover manipulation
+                try:
+                    cdata = mi.cover_data[1]
+                    if cdata is None and isinstance(mi.cover, (str, bytes)) and mi.cover and os.access(mi.cover, os.R_OK):
+                        with open(mi.cover, 'rb') as f:
+                            cdata = f.read() or None
+                    if cdata is not None:
+                        self._set_cover({book_id: cdata})
+                except Exception:
+                    if ignore_errors:
+                        traceback.print_exc()
+                    else:
+                        raise
+
                 for field in ('rating', 'series_index', 'timestamp'):
                     val = getattr(mi, field)
                     if val is not None:
@@ -2445,7 +2573,7 @@ class Cache:
 
     _set_metadata = set_metadata
 
-    def _do_add_format(self, book_id, fmt, stream, name=None, mtime=None):
+    def _do_add_format(self, book_id, fmt, stream, name=None, mtime=None, change=None):
         path = self._get_book_path(book_id, unsafe=True)
         if path is None:
             # Theoretically, this should never happen, but apparently it
@@ -2459,13 +2587,21 @@ class Cache:
         except IndexError:
             author = _('Unknown')
 
-        size, fname = self.backend.add_format(book_id, fmt, stream, title, author, path, name, mtime=mtime)
+        size, fname = self.backend.add_format(book_id, fmt, stream, title, author, path, name, mtime=mtime, change=change)
         return size, fname
 
-    def _record_format_added(self, book_id, fmt, fname, size):
+    def _record_format_added(self, book_id, fmt, fname, size, change=None):
         # Updates the formats and size of the book for a format file that has
         # been added and reports the change to the cache of computed
-        # categories, so that callers can use the quiet write lock.
+        # categories, so that callers can use the quiet write lock. With a
+        # ChangeRecord the change is reported by it, and rolled back with it.
+        if change is not None:
+            change.modifies(self.fields['formats'].table, self.fields['size'].table)
+            change.touch('formats', (book_id,), (fmt,))
+            change.touch('size', (book_id,), None)
+            max_size = self.fields['formats'].table.update_fmt(book_id, fmt, fname, size, self.backend)
+            self.fields['size'].table.update_sizes({book_id: max_size})
+            return
         try:
             max_size = self.fields['formats'].table.update_fmt(book_id, fmt, fname, size, self.backend)
             self.fields['size'].table.update_sizes({book_id: max_size})
@@ -2528,16 +2664,25 @@ class Cache:
                 stream = open(make_long_path_useable(stream_or_path), 'rb')
                 needs_close = True
             try:
-                size, fname = self._do_add_format(book_id, fmt, stream, name)
+                with self._change() as change:
+                    change.modifies(self.fields['last_modified'].table)
+                    # The format file is staged and only replaced after the commit
+                    size, fname = self._do_add_format(book_id, fmt, stream, name, change=change)
+                    self._record_format_added(book_id, fmt, fname, size, change)
+                    self._update_last_modified((book_id,))
+                    self._queue_pages_scan(book_id)
+                    # The format file is only moved into place after the commit, but code running inside this
+                    # change (rendering composite columns, for {formats}, which lists only the formats whose
+                    # files exist, or reading format metadata) sees it missing and caches that: discard those
+                    # values again after the commit
+                    change.after_commit(lambda: self.format_metadata_cache[book_id].pop(fmt, None))
+                    change.after_commit(partial(self._clear_composite_caches, (book_id,)))
+                    change.after_commit(partial(self._clear_search_caches, (book_id,)))
+                    change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
             finally:
                 if needs_close:
                     stream.close()
             del stream
-
-            self._record_format_added(book_id, fmt, fname, size)
-            self._update_last_modified((book_id,))
-            self._queue_pages_scan(book_id)
-            self.event_dispatcher(EventType.format_added, book_id, fmt)
 
         if run_hooks:
             # Run post import plugins, the write lock is released so the plugin
@@ -2567,9 +2712,9 @@ class Cache:
             for fmt in fmts:
                 self.format_metadata_cache[book_id].pop(fmt, None)
 
+        removes = defaultdict(set)
+        metadata_map = {}
         if not db_only:
-            removes = defaultdict(set)
-            metadata_map = {}
             for book_id, fmts in formats_map.items():
                 try:
                     path = self._get_book_path(book_id)
@@ -2587,23 +2732,29 @@ class Cache:
                         'title': self._field_for('title', book_id),
                         'authors': self._field_for('authors', book_id),
                     }
-            if removes:
-                removed_map = self.backend.remove_formats(removes, metadata_map)
-
-        size_map = table.remove_formats(formats_map, self.backend)
-        self.fields['size'].table.update_sizes(size_map)
-
-        for book_id, fmts in formats_map.items():
-            for fmt in fmts:
-                run_plugins_on_postdelete(self, book_id, fmt)
-
-        self._update_last_modified(tuple(formats_map))
-        for book_id in formats_map:
-            self._queue_pages_scan(book_id)
-        self.event_dispatcher(EventType.formats_removed, formats_map)
+        with self._change() as change:
+            change.modifies(table, self.fields['size'].table, self.fields['last_modified'].table)
+            if not db_only and removes:
+                # The files are moved to the trash only after the rows are deleted and committed
+                removed_map = self.backend.remove_formats(removes, metadata_map, change=change)
+            for book_id, fmts in formats_map.items():
+                change.touch('formats', (book_id,), fmts)
+            change.touch('size', formats_map, None)
+            size_map = table.remove_formats(formats_map, self.backend)
+            self.fields['size'].table.update_sizes(size_map)
+            self._update_last_modified(tuple(formats_map))
+            for book_id in formats_map:
+                self._queue_pages_scan(book_id)
+            change.after_commit(partial(self._run_postdelete_plugins, formats_map))
+            change.after_commit(partial(self.event_dispatcher, EventType.formats_removed, formats_map))
         return removed_map
 
     _remove_formats = remove_formats
+
+    def _run_postdelete_plugins(self, formats_map):
+        for book_id, fmts in formats_map.items():
+            for fmt in fmts:
+                run_plugins_on_postdelete(self, book_id, fmt)
 
     @read_api
     def get_next_series_num_for(self, series, field='series', current_indices=False):
@@ -2638,7 +2789,10 @@ class Cache:
         string."""
         table = self.fields['authors'].table
         result = []
-        rmap = {key_func(v): k for k, v in table.id_map.items()}
+        if key_func is icu_lower:
+            rmap = table.id_map.lower_index()
+        else:
+            rmap = {key_func(v): k for k, v in table.id_map.items()}
         for aut in authors:
             aid = rmap.get(key_func(aut), None)
             result.append(author_to_author_sort(aut) if aid is None else table.asort_map[aid])
@@ -2685,8 +2839,31 @@ class Cache:
 
     # Most fields are set through set_field(), which reports the changed items
     # itself, everything else this changes is reported explicitly below
+    def _all_field_tables(self):
+        'The in-memory tables of all the fields, for a change that may touch any of them (see create_book_entry())'
+        for field in self.fields.values():
+            table = getattr(field, 'table', None)  # Some fields, like ondevice, have no table
+            if table is not None:
+                yield table
+
     @quiet_write_api
     def create_book_entry(self, mi, cover=None, add_duplicates=True, force_id=None, apply_import_tags=True, preserve_uuid=False):
+        # One transaction for the books row, all the metadata and the caches: if
+        # anything fails, nothing of the book is left in the database or in
+        # memory (the tables are re-read from the database). When called
+        # while another change is open (add_books()) this is a savepoint.
+        with self._change() as change:
+            change.modifies(*self._all_field_tables())
+            created = []
+            try:
+                return self._create_book_entry_in_change(change, created, mi, cover, add_duplicates, force_id, apply_import_tags, preserve_uuid)
+            except BaseException:
+                if created:
+                    # Remove the folder and the cover written for the book
+                    change.on_rollback(partial(self._discard_new_book, created[0], self._field_for('path', created[0])))
+                raise
+
+    def _create_book_entry_in_change(self, change, created, mi, cover, add_duplicates, force_id, apply_import_tags, preserve_uuid):
         if mi.tags:
             mi.tags = list(mi.tags)
         if apply_import_tags:
@@ -2720,7 +2897,8 @@ class Cache:
                 (force_id, mi.title, series_index, aus),
             )
         book_id = self.backend.last_insert_rowid()
-        self.event_dispatcher(EventType.book_created, book_id)
+        created.append(book_id)
+        change.after_commit(partial(self.event_dispatcher, EventType.book_created, book_id))
 
         mi.timestamp = utcnow() if (mi.timestamp is None or is_date_undefined(mi.timestamp)) else mi.timestamp
         mi.pubdate = UNDEFINED_DATE if mi.pubdate is None else mi.pubdate
@@ -2746,6 +2924,10 @@ class Cache:
             elif field == 'uuid':
                 self.fields[field].table.uuid_to_id_map[val] = book_id
             self.fields[field].table.book_col_map[book_id] = val
+        # The composite columns and searches of the new book were evaluated by _set_metadata() before these values
+        # were in memory
+        self._clear_composite_caches((book_id,))
+        self._clear_search_caches((book_id,))
         # These are not categories, but which books a Virtual library matches
         # can depend on them
         for field in ('size', 'sort', 'series_index', 'author_sort', 'uuid', 'cover'):
@@ -2769,25 +2951,90 @@ class Cache:
         """
         duplicates, ids = [], []
         for mi, format_map in books:
-            book_id = self.create_book_entry(mi, add_duplicates=add_duplicates, apply_import_tags=apply_import_tags, preserve_uuid=preserve_uuid)
-            if book_id is None:
+            if not add_duplicates and self.has_book(mi):
                 duplicates.append((mi, format_map))
-            else:
-                fmt_map = {}
-                ids.append(book_id)
-                for fmt, stream_or_path in format_map.items():
-                    if self.add_format(book_id, fmt, stream_or_path, dbapi=dbapi, run_hooks=run_hooks):
-                        fmt_map[fmt.lower()] = getattr(stream_or_path, 'name', stream_or_path) or '<stream>'
-                run_plugins_on_postadd(dbapi or self, book_id, fmt_map)
+                continue
+            # Everything about a book (the row, the metadata and the formats) is
+            # one transaction: if it fails the book is not added, the books
+            # before it stay added and the exception is raised.
+            prepared = []
+            try:
+                if run_hooks:
+                    # Run import plugins, the write lock is not held to cater for
+                    # broken plugins that might spin the event loop by popping up a
+                    # message in the GUI during the processing.
+                    for fmt, stream_or_path in format_map.items():
+                        npath = run_import_plugins(stream_or_path, fmt)
+                        hfmt = os.path.splitext(npath)[-1].lower().replace('.', '').upper()
+                        stream = open(make_long_path_useable(npath), 'rb')
+                        prepared.append((fmt, stream_or_path, check_ebook_format(stream, hfmt), stream))
+                else:
+                    prepared = [(fmt, stream_or_path, fmt, stream_or_path) for fmt, stream_or_path in format_map.items()]
+                with self.quiet_write_lock:
+                    # Duplicates were rejected above, before the import plugins ran, so has_book() (a scan of all
+                    # the books) is not run again in create_book_entry()
+                    book_id, fmt_map = self._add_book_in_one_change(mi, prepared, True, apply_import_tags, preserve_uuid, dbapi)
+                if book_id is None:
+                    duplicates.append((mi, format_map))
+                    continue
+                if run_hooks:
+                    # The write lock is released so the plugins can call api without a locking violation.
+                    for fmt, stream_or_path, hfmt, stream in prepared:
+                        run_plugins_on_postimport(dbapi or self, book_id, (hfmt or '').upper())
+            finally:
+                if run_hooks:
+                    for x in prepared:
+                        x[3].close()
+            ids.append(book_id)
+            self.queue_next_fts_job()
+            run_plugins_on_postadd(dbapi or self, book_id, fmt_map)
         return ids, duplicates
 
     _add_books = add_books
+
+    def _add_book_in_one_change(self, mi, prepared, add_duplicates, apply_import_tags, preserve_uuid, dbapi):
+        """ Add a book and its formats in one change (the write lock must be held). Returns (book id, map of the lowercased
+        formats added to their file names), the book id is None if the book is a duplicate. If it raises, the book was not added:
+        the database and the in-memory state are as before, and the folder of the book is removed. """
+        book_id = None
+        with self._change() as change:
+            change.modifies(*self._all_field_tables())
+            try:
+                book_id = self._create_book_entry(mi, add_duplicates=add_duplicates, apply_import_tags=apply_import_tags, preserve_uuid=preserve_uuid)
+                if book_id is None:
+                    return None, {}
+                fmt_map = {}
+                for fmt, stream_or_path, hfmt, stream in prepared:
+                    if self._add_format(book_id, hfmt, stream, run_hooks=False, dbapi=dbapi):
+                        fmt_map[fmt.lower()] = getattr(stream_or_path, 'name', stream_or_path) or '<stream>'
+            except BaseException:
+                if book_id is not None:
+                    path = self._field_for('path', book_id)
+                    change.on_rollback(partial(self._discard_new_book, book_id, path))
+                raise
+        return book_id, fmt_map
+
+    def _discard_new_book(self, book_id, path):
+        # Called when adding a book failed: remove what was written to disk for it, the folder of the book. Its path
+        # always ends with its id, this makes sure that nothing else is ever removed.
+        self.dirtied_cache.pop(book_id, None)
+        self.format_metadata_cache.pop(book_id, None)
+        if path and '/' in path and path.endswith(f' ({book_id})') and '..' not in path.split('/'):
+            full = os.path.join(self.backend.library_path, *path.split('/'))
+            shutil.rmtree(make_long_path_useable(full), ignore_errors=True)
+            try:
+                os.rmdir(os.path.dirname(full))  # The folder of the author if it is empty now
+            except OSError:
+                pass
 
     @write_api
     def remove_books(self, book_ids, permanent=False):
         """Remove the books specified by the book_ids from the database and delete
         their format files. If ``permanent`` is False, then the format files
-        are placed in the per-library trash directory."""
+        are placed in the per-library trash directory. If some books cannot be
+        removed, they are left completely untouched, all the other books are
+        removed and :class:`BooksNotRemoved` is raised once the library is in a
+        consistent state."""
         path_map = {}
         for book_id in book_ids:
             try:
@@ -2803,7 +3050,10 @@ class Cache:
                     self.backend.write_backup(path, raw)
                 except Exception:
                     traceback.print_exc()
-        self.backend.remove_books(path_map, permanent=permanent)
+        errors = {}
+        failures = self.backend.remove_books(path_map, permanent=permanent, errors=errors)
+        if failures:
+            book_ids = tuple(x for x in book_ids if x not in failures)
         for field in self.fields.values():
             try:
                 table = field.table
@@ -2815,7 +3065,13 @@ class Cache:
         self._clear_caches(book_ids=book_ids, template_cache=False, search_cache=False)
         for cc in self.cover_caches:
             cc.invalidate(book_ids)
-        self.event_dispatcher(EventType.books_removed, book_ids)
+        if book_ids:
+            self.event_dispatcher(EventType.books_removed, book_ids)
+        if failures:
+            # Books that could not be removed are left untouched, both on disk
+            # and in memory, so that the library is consistent. The first error is the cause, so that callers can still
+            # recognize an OSError such as a file that is open in another program.
+            raise BooksNotRemoved(failures, book_ids) from next(iter(errors.values()), None)
 
     _remove_books = remove_books
 
@@ -2839,6 +3095,17 @@ class Cache:
         :param restrict_to_book_ids: An optional set of book ids for which the rename is to be performed, defaults to all books.
         """
         f = self.fields[field]
+        # Every book that has one of the items: the books whose caches are cleared if the rename fails
+        col_book_map = getattr(f.table, 'col_book_map', {})
+        books_with_items = set()
+        for item_id in item_id_to_new_name_map:
+            books_with_items.update(col_book_map.get(item_id, ()))
+        with self._change() as change:
+            change.modifies(f.table, self.fields['last_modified'].table)
+            change.touch(field, books_with_items, None)
+            return self._rename_items_in_change(change, f, field, item_id_to_new_name_map, change_index, restrict_to_book_ids)
+
+    def _rename_items_in_change(self, change, f, field, item_id_to_new_name_map, change_index, restrict_to_book_ids):
         affected_books = set()
         try:
             sv = f.metadata['is_multiple']['ui_to_list']
@@ -2898,7 +3165,7 @@ class Cache:
                 ab, idm = self._rename_items(field, default_process_map, change_index=change_index)
                 affected_books.update(ab)
                 id_map.update(idm)
-            self.event_dispatcher(EventType.items_renamed, field, affected_books, id_map)
+            change.after_commit(partial(self.event_dispatcher, EventType.items_renamed, field, affected_books, id_map))
             return affected_books, id_map
 
         try:
@@ -2925,7 +3192,7 @@ class Cache:
                     'author_sort',
                     {k: ' & '.join(v) for k, v in self._author_sort_strings_for_books(affected_books).items()},
                 )
-                self._update_path(affected_books, mark_as_dirtied=False)
+                self._update_path_in_change(change, affected_books, mark_as_dirtied=False)
             elif change_index and hasattr(f, 'index_field') and tweaks['series_index_auto_increment'] != 'no_change':
                 for book_id in moved_books:
                     self._set_field(
@@ -2933,8 +3200,8 @@ class Cache:
                         {book_id: self._get_next_series_num_for(self._fast_field_for(f, book_id), field=field)},
                     )
             self._mark_as_dirty(affected_books)
-            self._clear_link_map_cache(affected_books)
-        self.event_dispatcher(EventType.items_renamed, field, affected_books, id_map)
+            change.after_commit(partial(self._clear_link_map_cache, affected_books))
+        change.after_commit(partial(self.event_dispatcher, EventType.items_renamed, field, affected_books, id_map))
         return affected_books, id_map
 
     _rename_items = rename_items
@@ -2948,14 +3215,24 @@ class Cache:
         field = self.fields[field]
         if restrict_to_book_ids is not None and not isinstance(restrict_to_book_ids, (MutableSet, Set)):
             restrict_to_book_ids = frozenset(restrict_to_book_ids)
-        affected_books = field.table.remove_items(item_ids, self.backend, restrict_to_book_ids=restrict_to_book_ids)
-        if affected_books:
-            if hasattr(field, 'index_field'):
-                self._set_field(field.index_field.name, {bid: 1.0 for bid in affected_books})
-            else:
+        col_book_map = getattr(field.table, 'col_book_map', {})
+        # item_ids is iterated more than once below, callers can pass a generator
+        item_ids = tuple(item_ids)
+        books_with_items = set()
+        for item_id in item_ids:
+            books_with_items.update(col_book_map.get(item_id, ()))
+        with self._change() as change:
+            change.modifies(field.table, self.fields['last_modified'].table)
+            change.touch(field.name, books_with_items, None)
+            affected_books = field.table.remove_items(item_ids, self.backend, restrict_to_book_ids=restrict_to_book_ids)
+            if affected_books:
+                if hasattr(field, 'index_field'):
+                    self._set_field(field.index_field.name, {bid: 1.0 for bid in affected_books})
+                # set_field() only marks as dirty the books whose series index changed, which updates their last modified
+                # time, the backup and the caches. All the books lose the series, so mark them all dirty.
                 self._mark_as_dirty(affected_books)
-            self._clear_link_map_cache(affected_books)
-        self.event_dispatcher(EventType.items_removed, field, affected_books, item_ids)
+                change.after_commit(partial(self._clear_link_map_cache, affected_books))
+            change.after_commit(partial(self.event_dispatcher, EventType.items_removed, field, affected_books, item_ids))
         return affected_books
 
     _remove_items = remove_items
@@ -3100,37 +3377,45 @@ class Cache:
 
     @write_api
     def set_sort_for_authors(self, author_id_to_sort_map, update_books=True):
-        sort_map = self.fields['authors'].table.set_sort_names(author_id_to_sort_map, self.backend)
-        changed_books = set()
-        if update_books:
-            val_map = {}
-            for author_id in sort_map:
-                books = self._books_for_field('authors', author_id)
-                changed_books |= books
-                for book_id in books:
-                    authors = self._field_ids_for('authors', book_id)
-                    adata = self._author_data(authors)
-                    sorts = [adata[x]['sort'] for x in authors]
-                    val_map[book_id] = ' & '.join(sorts)
-            if val_map:
-                self._set_field('author_sort', val_map)
-        if changed_books:
-            self._mark_as_dirty(changed_books)
-            self._clear_link_map_cache(changed_books)
+        table = self.fields['authors'].table
+        with self._change() as change:
+            change.modifies(table, self.fields['last_modified'].table)
+            change.touch('authors', (), None, False)
+            sort_map = table.set_sort_names(author_id_to_sort_map, self.backend)
+            changed_books = set()
+            if update_books:
+                val_map = {}
+                for author_id in sort_map:
+                    books = self._books_for_field('authors', author_id)
+                    changed_books |= books
+                    for book_id in books:
+                        authors = self._field_ids_for('authors', book_id)
+                        adata = self._author_data(authors)
+                        sorts = [adata[x]['sort'] for x in authors]
+                        val_map[book_id] = ' & '.join(sorts)
+                if val_map:
+                    self._set_field('author_sort', val_map)
+            if changed_books:
+                self._mark_as_dirty(changed_books)
+                change.after_commit(partial(self._clear_link_map_cache, changed_books))
         return changed_books
 
     _set_sort_for_authors = set_sort_for_authors
 
     @write_api
     def set_link_for_authors(self, author_id_to_link_map):
-        link_map = self.fields['authors'].table.set_links(author_id_to_link_map, self.backend)
-        changed_books = set()
-        for author_id in link_map:
-            changed_books |= self._books_for_field('authors', author_id)
-        if changed_books:
-            self._mark_as_dirty(changed_books)
-            self._clear_link_map_cache(changed_books)
-        self.event_dispatcher(EventType.links_changed, 'authors', frozenset(author_id_to_link_map))
+        table = self.fields['authors'].table
+        with self._change() as change:
+            change.modifies(table, self.fields['last_modified'].table)
+            change.touch('authors', (), None, False)
+            link_map = table.set_links(author_id_to_link_map, self.backend)
+            changed_books = set()
+            for author_id in link_map:
+                changed_books |= self._books_for_field('authors', author_id)
+            if changed_books:
+                self._mark_as_dirty(changed_books)
+                change.after_commit(partial(self._clear_link_map_cache, changed_books))
+            change.after_commit(partial(self.event_dispatcher, EventType.links_changed, 'authors', frozenset(author_id_to_link_map)))
         return changed_books
 
     _set_link_for_authors = set_link_for_authors
@@ -3250,14 +3535,17 @@ class Cache:
             id_to_link_map = {fid: value_to_link_map[k] for k, fid in fids.items() if fid is not None and not lm.get(fid)}
         else:
             id_to_link_map = {fid: value_to_link_map[k] for k, fid in fids.items() if fid is not None}
-        result_map = table.set_links(id_to_link_map, self.backend)
-        changed_books = set()
-        for id_ in result_map:
-            changed_books |= self._books_for_field(field, id_)
-        if changed_books:
-            self._mark_as_dirty(changed_books)
-            self._clear_link_map_cache(changed_books)
-        self.event_dispatcher(EventType.links_changed, field, frozenset(id_to_link_map))
+        with self._change() as change:
+            change.modifies(table, self.fields['last_modified'].table)
+            change.touch(field, (), None, False)
+            result_map = table.set_links(id_to_link_map, self.backend)
+            changed_books = set()
+            for id_ in result_map:
+                changed_books |= self._books_for_field(field, id_)
+            if changed_books:
+                self._mark_as_dirty(changed_books)
+                change.after_commit(partial(self._clear_link_map_cache, changed_books))
+            change.after_commit(partial(self.event_dispatcher, EventType.links_changed, field, frozenset(id_to_link_map)))
         return changed_books
 
     _set_link_map = set_link_map
@@ -3444,6 +3732,7 @@ class Cache:
     @write_api
     def saved_search_add(self, name, val):
         self._search_api.saved_searches.add(name, val)
+        self._clear_search_caches()
 
     _saved_search_add = saved_search_add
 
@@ -3562,7 +3851,6 @@ class Cache:
 
     _copy_format_from_trash = copy_format_from_trash
 
-    # Changes only the formats and size of the book, which _record_format_added() reports
     @quiet_write_api
     def move_format_from_trash(self, book_id, fmt):
         """Undelete a format from the trash directory"""
@@ -3576,12 +3864,20 @@ class Cache:
         fpath = self.backend.path_for_trash_format(book_id, fmt)
         if not fpath:
             raise ValueError(f'No format {fmt} found in book {book_id}')
-        size, fname = self._do_add_format(book_id, fmt, fpath, name)
         self.format_metadata_cache.pop(book_id, None)
-        self._record_format_added(book_id, fmt, fname, size)
-        self._queue_pages_scan(book_id)
-        self.event_dispatcher(EventType.format_added, book_id, fmt)
-        self.backend.remove_trash_formats_dir_if_empty(book_id)
+        with self._change() as change:
+            # The file is moved out of the trash only after the row is committed
+            size, fname = self._do_add_format(book_id, fmt, fpath, name, change=change)
+            self._record_format_added(book_id, fmt, fname, size, change)
+            # Composite columns, searches and format metadata that use the formats of the book are stale now, and code running
+            # inside this change sees the file still missing and caches that: discard them once the file is in place. Unlike
+            # add_format() this does not change the last modified time of the book
+            change.after_commit(lambda: self.format_metadata_cache.pop(book_id, None))
+            change.after_commit(partial(self._clear_composite_caches, (book_id,)))
+            change.after_commit(partial(self._clear_search_caches, (book_id,)))
+            self._queue_pages_scan(book_id)
+            change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
+            change.after_commit(partial(self.backend.remove_trash_formats_dir_if_empty, book_id))
 
     _move_format_from_trash = move_format_from_trash
 

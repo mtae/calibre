@@ -218,6 +218,37 @@ class LoopTest(BaseTest):
                 subject = dict(x[0] for x in cert['subject'])
                 self.ae(subject['commonName'], address)
 
+    def test_ssl_close_needed(self):
+        "Test that a connection that fails in the SSL buffer drain is the one that is closed"
+        from types import SimpleNamespace as NS
+
+        from calibre.srv.loop import READ, ServerLoop
+
+        class Conn:
+            wait_for = READ
+            last_activity = 1e18
+            read_buffer = NS(has_data=False)
+
+            def __init__(self, name, ready):
+                self.name, self.ready = name, ready
+
+            def drain_ssl_buffer(self):
+                pass
+
+        loop = object.__new__(ServerLoop)
+        loop.opts = NS(timeout=60)
+        loop.ssl_context = object()
+        loop.connection_map = {10: Conn('dead', False), 11: Conn('live', True)}
+        closed = []
+        loop.close = lambda s, conn: closed.append((s, conn.name))
+
+        def no_socket():
+            raise ValueError('stop tick after the close calls')
+        loop.socket = NS(fileno=no_socket)
+        loop.log = NS(error=lambda *a: None)
+        loop.tick()
+        self.ae(closed, [(10, 'dead')])
+
     @skipIf(not has_preactivated_support, 'pre_activated_socket not available')
     def test_socket_activation(self):
         "Test socket activation"
@@ -333,6 +364,22 @@ class LoopTest(BaseTest):
         self.assertTrue(tb)
         self.assertIn('a testing error', tb)
         jm.start_job('simple test', 'calibre.srv.jobs', 'sleep_test', args=(1.0,))
+        jm.shutdown(), jm.wait_for_shutdown(monotonic() + 1)
+
+    def test_jobs_manager_no_time_limit(self):
+        "A max_job_time of zero means jobs are never aborted for running too long"
+        from calibre.srv.jobs import JobsManager
+
+        O = namedtuple('O', 'max_jobs max_job_time')
+        jm = JobsManager(O(1, 0), None)
+        job_id = jm.start_job('simple test', 'calibre.srv.jobs', 'sleep_test', args=(1.0,))
+        while jm.job_status(job_id)[0] == 'waiting':
+            time.sleep(0.01)
+        self.assertIn(jm.wait_for_running_job(job_id), (True, None))
+        status, result, tb, was_aborted = jm.job_status(job_id)
+        self.assertEqual(status, 'finished')
+        self.assertFalse(was_aborted)
+        self.assertEqual(result, 1.0)
         jm.shutdown(), jm.wait_for_shutdown(monotonic() + 1)
 
 

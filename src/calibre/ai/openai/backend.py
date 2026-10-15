@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from urllib.request import Request
 
 if TYPE_CHECKING:
+    from unittest import TestSuite
+
     from calibre.ai.openai.config import ConfigWidget
 else:
-    ConfigWidget = object
+    ConfigWidget = TestSuite = object
 
 from calibre.ai import (
     ChatMessage,
@@ -199,11 +201,8 @@ def newest_gpt_models() -> dict[str, Model]:
             elif 'nano' in parts:
                 which = low
             which.append(model)
-    return {
-        'high': max(high, key=attrgetter('created')),
-        'medium': max(medium, key=attrgetter('created')),
-        'low': max(low, key=attrgetter('created')),
-    }
+    tiers = {'high': high, 'medium': medium, 'low': low}
+    return {k: max(v, key=attrgetter('created')) for k, v in tiers.items() if v}
 
 
 def model_choice_for_text() -> Model:
@@ -213,7 +212,10 @@ def model_choice_for_text() -> Model:
         if m := get_available_models().get(model_id):
             return m
     m = newest_gpt_models()
-    return m.get(pref('model_choice_strategy', 'medium'), m['medium'])
+    ans = m.get(pref('model_choice_strategy', 'medium')) or m.get('medium')
+    if ans is None:
+        raise ValueError('No OpenAI models found for automatic model choice')
+    return ans
 
 
 def model_for_use_model(use_model: str) -> Model:
@@ -292,7 +294,7 @@ def text_chat_implementation(messages: Iterable[ChatMessage], use_model: str = '
         if m.response_id:
             previous_response_id = m.response_id
             idx = len(mcon) - 1 - i
-            messages = mcon[idx:]
+            messages = mcon[idx + 1 :]
             break
     data = {
         'input': [for_assistant(m) for m in messages],
@@ -445,6 +447,59 @@ def develop(use_model: str = '', msg: str = '') -> None:
 def develop_structured(use_model: str = '', prompt: str = '') -> None:
     # calibre-debug -c 'from calibre.ai.openai.backend import develop_structured; develop_structured()'
     develop_structured_output(generate_structured_output, prompt, use_model=use_model)
+
+
+def find_tests() -> TestSuite:
+    import unittest
+    from unittest.mock import patch
+
+    class TestOpenAIBackend(unittest.TestCase):
+        def test_model_choice_with_missing_tiers(self) -> None:
+            models = {m['id']: Model.from_dict(m) for m in ({'id': 'gpt-4o-mini', 'created': 1}, {'id': 'gpt-4.1-mini', 'created': 2})}
+            newest_gpt_models.cache_clear()
+            try:
+                with patch(__name__ + '.get_available_models', return_value=models), patch(__name__ + '.pref', side_effect=lambda key, defval=None: defval):
+                    self.assertEqual(model_choice_for_text().id, 'gpt-4.1-mini')
+            finally:
+                newest_gpt_models.cache_clear()
+        def test_openai_previous_response_not_resent(self) -> None:
+            sent: list[dict[str, Any]] = []
+
+            def fake_chat_request(data: dict[str, Any], model: Model, use_tools: bool = True) -> dict[str, Any]:
+                sent.append(data)
+                return data
+
+            def run(*messages: ChatMessage) -> dict[str, Any]:
+                sent.clear()
+                with (
+                    patch(f'{__name__}.model_for_use_model', lambda use_model: Model.from_dict({'id': 'gpt-test'})),
+                    patch(f'{__name__}.chat_request', fake_chat_request),
+                    patch(f'{__name__}.read_streaming_response', lambda rq, name: iter(())),
+                ):
+                    tuple(text_chat_implementation(messages))
+                return sent[0]
+
+            user, assistant = ChatMessageType.user, ChatMessageType.assistant
+            # The reply identified by previous_response_id is already known to
+            # the server, only the messages after it must be sent
+            data = run(ChatMessage('q1', user), ChatMessage('a1', assistant, response_id='r1'), ChatMessage('q2', user))
+            self.assertEqual(data['previous_response_id'], 'r1')
+            self.assertEqual(data['input'], [{'role': 'user', 'content': 'q2'}])
+            data = run(
+                ChatMessage('q1', user),
+                ChatMessage('a1', assistant, response_id='r1'),
+                ChatMessage('q2', user),
+                ChatMessage('a2', assistant, response_id='r2'),
+                ChatMessage('q3', user),
+            )
+            self.assertEqual(data['previous_response_id'], 'r2')
+            self.assertEqual(data['input'], [{'role': 'user', 'content': 'q3'}])
+            # Without a response id the whole conversation is sent
+            data = run(ChatMessage('q1', user), ChatMessage('a1', assistant), ChatMessage('q2', user))
+            self.assertNotIn('previous_response_id', data)
+            self.assertEqual([x['content'] for x in data['input']], ['q1', 'a1', 'q2'])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestOpenAIBackend)
 
 
 if __name__ == '__main__':

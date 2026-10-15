@@ -186,11 +186,12 @@ icu_Collator_sort_key(icu_Collator *self, PyObject *input) {
     }
     key_size = ucol_getSortKey(self->collator, buf, sz, buf2, bsz);
     if (key_size > bsz) {
-        buf2 = realloc(buf2, (key_size + 1) * sizeof(uint8_t));
-        if (buf2 == NULL) {
+        uint8_t *bigger = realloc(buf2, (key_size + 1) * sizeof(uint8_t));
+        if (bigger == NULL) {
             PyErr_NoMemory();
             goto end;
         }
+        buf2 = bigger;
         key_size = ucol_getSortKey(self->collator, buf, sz, buf2, key_size + 1);
     }
     ans = PyBytes_FromStringAndSize((char *)buf2, key_size);
@@ -400,17 +401,22 @@ icu_Collator_contractions(icu_Collator *self, PyObject *args) {
     UChar *str = NULL;
     UChar32 start = 0, end = 0;
     int32_t count = 0, len = 0, i;
-    PyObject *ans = Py_None, *pbuf;
+    PyObject *ans = NULL, *pbuf;
+    const int32_t str_capacity = 100;
 
     if (self->contractions == NULL) {
-        self->contractions = uset_open(1, 0);
-        if (self->contractions == NULL) return PyErr_NoMemory();
         self->contractions = ucol_getTailoredSet(self->collator, &status);
+        if (U_FAILURE(status)) {
+            if (self->contractions != NULL) uset_close(self->contractions);
+            self->contractions = NULL;
+            PyErr_SetString(PyExc_ValueError, u_errorName(status));
+            return NULL;
+        }
     }
     status = U_ZERO_ERROR;
     count = uset_getItemCount(self->contractions);
 
-    str = (UChar *)calloc(100, sizeof(UChar));
+    str = (UChar *)calloc(str_capacity, sizeof(UChar));
     if (str == NULL) {
         PyErr_NoMemory();
         goto end;
@@ -419,10 +425,10 @@ icu_Collator_contractions(icu_Collator *self, PyObject *args) {
     if (ans == NULL) { goto end; }
 
     for (i = 0; i < count; i++) {
-        len = uset_getItem(self->contractions, i, &start, &end, str, 1000, &status);
-        if (len >= 2) {
+        status = U_ZERO_ERROR;
+        len = uset_getItem(self->contractions, i, &start, &end, str, str_capacity, &status);
+        if (len >= 2 && U_SUCCESS(status)) {
             // We have a string
-            status = U_ZERO_ERROR;
             pbuf = icu_to_python(str, len);
             if (pbuf == NULL) {
                 Py_DECREF(ans);
@@ -431,7 +437,8 @@ icu_Collator_contractions(icu_Collator *self, PyObject *args) {
             }
             PyTuple_SetItem(ans, i, pbuf);
         } else {
-            // Ranges don't make sense for contractions, ignore them
+            // Ranges don't make sense for contractions, ignore them (as well as
+            // strings too long for the buffer)
             PyTuple_SetItem(ans, i, Py_None);
             Py_INCREF(Py_None);
         }
@@ -464,7 +471,7 @@ icu_Collator_startswith(icu_Collator *self, PyObject *const *args, Py_ssize_t na
     if (a == NULL) return NULL;
     b = python_to_icu(b_, &bsz);
     if (b == NULL) {
-        Py_DECREF(a);
+        free(a);
         return NULL;
     }
     PyObject *ans = Py_False;
@@ -742,7 +749,10 @@ icu_Collator_clone(icu_Collator *self, PyObject *args) {
     }
 
     clone = PyObject_New(icu_Collator, &icu_CollatorType);
-    if (clone == NULL) return PyErr_NoMemory();
+    if (clone == NULL) {
+        ucol_close(collator);
+        return PyErr_NoMemory();
+    }
 
     clone->collator = collator;
     clone->contractions = NULL;
@@ -1093,12 +1103,14 @@ icu_BreakIterator_set_text(icu_BreakIterator *self, PyObject *input) {
     ubrk_setText(self->break_iterator, buf, sz, &status);
     if (U_FAILURE(status)) {
         free(buf);
-        buf = NULL;
         PyErr_SetString(PyExc_ValueError, u_errorName(status));
-    } else {
-        self->text = buf;
-        self->text_len = sz;
+        return NULL;
     }
+    // The break iterator now refers to buf and no longer to the previous text.
+    // Live iterators are invalidated by self->counter and never read it again.
+    free(self->text);
+    self->text = buf;
+    self->text_len = sz;
 
     Py_RETURN_NONE;
 
@@ -1905,6 +1917,10 @@ icu_normalize(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         case NFD: n = unorm2_getNFDInstance(&status); break;
         case NFKD: n = unorm2_getNFKDInstance(&status); break;
     }
+    if (n == NULL && U_SUCCESS(status)) {
+        PyErr_SetString(PyExc_ValueError, "Unknown normalization mode");
+        goto end;
+    }
     if (U_FAILURE(status)) {
         PyErr_SetString(PyExc_ValueError, u_errorName(status));
         goto end;
@@ -1921,14 +1937,18 @@ icu_normalize(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
 
 
     while (1) {
+        status = U_ZERO_ERROR;
         rsz = unorm2_normalize(n, source, sz, dest, cap, &status);
         if (status == U_BUFFER_OVERFLOW_ERROR) {
-            cap *= 2;
-            dest = (UChar *)realloc(dest, cap * sizeof(UChar));
-            if (dest == NULL) {
+            // rsz is the required capacity. Note that status has to be reset
+            // before retrying as ICU does nothing when passed a failure code.
+            cap = rsz + 1;
+            UChar *bigger = (UChar *)realloc(dest, cap * sizeof(UChar));
+            if (bigger == NULL) {
                 PyErr_NoMemory();
                 goto end;
             }
+            dest = bigger;
             continue;
         }
         break;

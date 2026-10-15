@@ -908,14 +908,14 @@ class Smarts(NullSmarts):
                 c.setPosition(start)
                 for b in boundaries:
                     if in_text:
-                        c.setPosition(start + b.offset, QTextCursor.MoveMode.KeepAnchor)
+                        c.setPosition(doc_position(block, b.offset), QTextCursor.MoveMode.KeepAnchor)
                         if c.hasSelection():
                             append(c.selectedText(), c.anchor())
                     in_text = not b.is_start
-                    c.setPosition(start + b.offset + 1)
+                    c.setPosition(doc_position(block, b.offset + 1))
                 if in_text:
                     # Add remaining text in block
-                    c.setPosition(block.position() + boundaries[-1].offset + 1)
+                    c.setPosition(doc_position(block, boundaries[-1].offset + 1))
                     c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
                     if c.hasSelection():
                         append(c.selectedText() + '\n', c.anchor())

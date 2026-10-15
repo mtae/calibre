@@ -50,8 +50,9 @@ the formats_removed event there too. The formats table and the size table are re
 rollback (the sizes are derived from the scan of the data table made when the formats are read).
 
 Residuals: a failure of an after_commit() file operation (disk full, permissions) leaves the database
-changed and the file as it was, it is raised to the caller; a ``_change()`` entered while the caller already holds a transaction of its
-own is applied when its savepoint is released, which is before
+changed and the file as it was, it is raised to the caller (when the format is new to the book, in add_format,
+move_format_from_trash and restore_original_format, the database then lists a format whose file does not exist);
+a ``_change()`` entered while the caller already holds a transaction of its own is applied when its savepoint is released, which is before
 the outer transaction commits. File operations other than the notes' are not deferred unless the write method adds them with
 ``after_commit()``. update_path stages the folder of a book (copy_tree, hardlinking when it can) next to the old one, switches
 the path and file name rows in the change, and removes the old folder from after_commit(); a failure removing it leaves a stray

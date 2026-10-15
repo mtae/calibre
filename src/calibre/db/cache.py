@@ -1653,6 +1653,12 @@ class Cache:
                 self._record_format_added(book_id, fmt, fname, size, change)
                 self._update_last_modified((book_id,))
                 self._queue_pages_scan(book_id)
+                # Code running inside this change (rendering composite columns, cached searches, reading format metadata)
+                # still sees the old file and caches that, discard those values again once the original is in place
+                change.after_commit(lambda: self.format_metadata_cache[book_id].pop(fmt, None))
+                change.after_commit(lambda: self.format_metadata_cache[book_id].pop(original_fmt, None))
+                change.after_commit(partial(self._clear_composite_caches, (book_id,)))
+                change.after_commit(partial(self._clear_search_caches, (book_id,)))
                 change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
                 # The file of the original format was moved above, so only its record is removed
                 self._remove_formats({book_id: (original_fmt,)}, db_only=True)
@@ -3044,7 +3050,8 @@ class Cache:
                     self.backend.write_backup(path, raw)
                 except Exception:
                     traceback.print_exc()
-        failures = self.backend.remove_books(path_map, permanent=permanent)
+        errors = {}
+        failures = self.backend.remove_books(path_map, permanent=permanent, errors=errors)
         if failures:
             book_ids = tuple(x for x in book_ids if x not in failures)
         for field in self.fields.values():
@@ -3062,8 +3069,9 @@ class Cache:
             self.event_dispatcher(EventType.books_removed, book_ids)
         if failures:
             # Books that could not be removed are left untouched, both on disk
-            # and in memory, so that the library is consistent.
-            raise BooksNotRemoved(failures, book_ids)
+            # and in memory, so that the library is consistent. The first error is the cause, so that callers can still
+            # recognize an OSError such as a file that is open in another program.
+            raise BooksNotRemoved(failures, book_ids) from next(iter(errors.values()), None)
 
     _remove_books = remove_books
 
@@ -3091,7 +3099,7 @@ class Cache:
         col_book_map = getattr(f.table, 'col_book_map', {})
         books_with_items = set()
         for item_id in item_id_to_new_name_map:
-            books_with_items |= col_book_map.get(item_id, ())
+            books_with_items.update(col_book_map.get(item_id, ()))
         with self._change() as change:
             change.modifies(f.table, self.fields['last_modified'].table)
             change.touch(field, books_with_items, None)
@@ -3208,9 +3216,11 @@ class Cache:
         if restrict_to_book_ids is not None and not isinstance(restrict_to_book_ids, (MutableSet, Set)):
             restrict_to_book_ids = frozenset(restrict_to_book_ids)
         col_book_map = getattr(field.table, 'col_book_map', {})
+        # item_ids is iterated more than once below, callers can pass a generator
+        item_ids = tuple(item_ids)
         books_with_items = set()
         for item_id in item_ids:
-            books_with_items |= col_book_map.get(item_id, ())
+            books_with_items.update(col_book_map.get(item_id, ()))
         with self._change() as change:
             change.modifies(field.table, self.fields['last_modified'].table)
             change.touch(field.name, books_with_items, None)
@@ -3859,11 +3869,12 @@ class Cache:
             # The file is moved out of the trash only after the row is committed
             size, fname = self._do_add_format(book_id, fmt, fpath, name, change=change)
             self._record_format_added(book_id, fmt, fname, size, change)
-            # Composite columns (and searches) that use the formats of the book are stale now. Unlike add_format() this does not change the
-            # last modified time of the book
-            if self.composites:
-                self._clear_composite_caches((book_id,))
-            self._clear_search_caches((book_id,))
+            # Composite columns, searches and format metadata that use the formats of the book are stale now, and code running
+            # inside this change sees the file still missing and caches that: discard them once the file is in place. Unlike
+            # add_format() this does not change the last modified time of the book
+            change.after_commit(lambda: self.format_metadata_cache.pop(book_id, None))
+            change.after_commit(partial(self._clear_composite_caches, (book_id,)))
+            change.after_commit(partial(self._clear_search_caches, (book_id,)))
             self._queue_pages_scan(book_id)
             change.after_commit(partial(self.event_dispatcher, EventType.format_added, book_id, fmt))
             change.after_commit(partial(self.backend.remove_trash_formats_dir_if_empty, book_id))

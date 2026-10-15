@@ -2794,7 +2794,7 @@ class DB:
                     files.append(TrashEntry(book_id, ttitle, (metadata.get('authors') or au)[0], '', mtime, tuple(formats)))
         return books, files
 
-    def remove_books(self, path_map, permanent=False):
+    def remove_books(self, path_map, permanent=False, errors=None):
         """
         Remove the books in path_map (a mapping of book id to the path of the
         book folder relative to the library). Every book is removed
@@ -2803,6 +2803,7 @@ class DB:
         succeed or both fail, so a book that cannot be removed is left
         untouched and the other books are still removed.
 
+        :param errors: If not None, a dict that is filled with the exception of every book that could not be removed
         :return: A dict mapping the ids of books that could not be removed to a string containing the traceback of the error
         """
         import traceback
@@ -2833,8 +2834,10 @@ class DB:
                             if os.path.exists(path) and self.is_deletable(path):
                                 self.rmtree(path) if permanent else self.move_book_to_trash(book_id, path)
                                 parent_paths.add(os.path.dirname(path))
-                except Exception:
+                except Exception as e:
                     failures[book_id] = traceback.format_exc()
+                    if errors is not None:
+                        errors[book_id] = e
         for path in parent_paths:
             remove_dir_if_empty(path, ignore_metadata_caches=True)
         return failures

@@ -404,13 +404,6 @@ class Select:
             if before:
                 return parent.index(child)
             return len(parent) - parent.index(child) - 1
-        if same_type:
-            siblings = OrderedSet(child.itersiblings(preceding=before))
-            return len(self.element_map[self.map_tag_name(child.tag)] & siblings)
-        else:
-            if before:
-                return parent.index(child)
-            return len(parent) - parent.index(child) - 1
 
     def all_sibling_count(self, child, same_type=False):
         ' Return the number of siblings of child or raise ValueError if child has no parent '

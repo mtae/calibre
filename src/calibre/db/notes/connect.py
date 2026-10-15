@@ -163,7 +163,14 @@ class Notes:
         transaction was already committed so all that is left behind are unused files.
         """
         if self.deferred_file_ops is not None:  # nested, the outermost one runs the operations
-            yield
+            ops, start = self.deferred_file_ops, len(self.deferred_file_ops)
+            try:
+                yield
+            except BaseException:
+                # The transaction of the nested block was rolled back, so what it queued must not run even if the
+                # outermost block catches the error and commits
+                del ops[start:]
+                raise
             return
         self.deferred_file_ops = ops = []
         try:

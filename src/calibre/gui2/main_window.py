@@ -132,15 +132,21 @@ class MainWindow(QMainWindow):
         sys.excepthook = ExceptionHandler(self)
 
     def show_possible_sharing_violation(self, e: Exception, det_msg: str = '') -> bool:
-        if not iswindows or not isinstance(e, OSError):
+        if not iswindows:
             return False
+        msg = getattr(e, 'locking_violation_msg', '')
+        if not isinstance(e, OSError):
+            # Errors such as BooksNotRemoved are raised from the OSError that caused them
+            e = e.__cause__
+            if not isinstance(e, OSError):
+                return False
+            msg = msg or getattr(e, 'locking_violation_msg', '')
         import errno
 
         from calibre_extensions import winutil
 
         if not (e.winerror == winutil.ERROR_SHARING_VIOLATION or e.errno == errno.EACCES or isinstance(e, PermissionError)):
             return False
-        msg = getattr(e, 'locking_violation_msg', '')
         if msg:
             msg = msg.strip() + ' '
         fname = e.filename

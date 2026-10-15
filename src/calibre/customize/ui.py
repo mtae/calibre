@@ -4,6 +4,7 @@ import functools
 import os
 import shutil
 import sys
+import threading
 import traceback
 from collections import defaultdict
 from collections.abc import Iterator
@@ -832,6 +833,9 @@ _initialized_plugins = []
 # The registration order of all builtin and other plugins, with the names of the
 # late groups that have not been loaded yet. See _ensure_late()
 _init_order = []
+# Held while the late groups are loaded, so that a thread that asks for a plugin meanwhile waits for them. Reentrant because
+# initializing a plugin can look up other plugins.
+_late_lock = threading.RLock()
 
 
 def initialize_plugin(plugin, path_to_zip_file=None, installation_type=PluginInstallationType.BUILTIN):
@@ -967,6 +971,19 @@ def _ensure_late(times=None):
     resulting list of plugins is identical to what eager initialization gives:
     same members, same order. Returns True if any plugins were added.
     """
+    if not _late_lock.acquire(blocking=False):
+        # Another thread is loading the late groups. Wait for it, the plugins it adds may not have been there when the caller
+        # looked.
+        with _late_lock:
+            pass
+        return True
+    try:
+        return _load_late(times)
+    finally:
+        _late_lock.release()
+
+
+def _load_late(times):
     global _init_order
     order, _init_order = _init_order, []
     if not any(isinstance(x, str) for x in order):

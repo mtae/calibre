@@ -894,6 +894,12 @@ def find_tests(which_tests=None, exclude_tests=None):
         from calibre.gui2.preferences.emailp import find_tests
 
         a(find_tests())
+        from calibre.gui2.store.config.chooser.models import find_tests
+
+        a(find_tests())
+        from calibre.gui2.preferences.template_functions import find_tests
+
+        a(find_tests())
         from calibre.gui2.tweak_book.spell import find_tests
 
         a(find_tests())
@@ -1036,9 +1042,6 @@ def find_tests(which_tests=None, exclude_tests=None):
 
         a(find_tests())
         from calibre.gui2.geometry import find_tests
-
-        a(find_tests())
-        from calibre.gui2.preferences.emailp import find_tests
 
         a(find_tests())
         from calibre.gui2.store.stores.ebookpoint_plugin import find_tests

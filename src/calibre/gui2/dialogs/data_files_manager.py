@@ -446,6 +446,14 @@ class DataFilesManager(Dialog):
             )
 
         m = {f'{DATA_DIR_NAME}/{os.path.basename(x)}': x for x in files}
+        if len(m) != len(files):
+            return error_dialog(
+                self,
+                _('Cannot add'),
+                _('Cannot add these data files because several of them have the same file name'),
+                show=True,
+                det_msg='\n'.join(files),
+            )
         added = self.db.add_extra_files(self.book_id, m, replace=False, auto_rename=False)
         collisions = set(m) - set(added)
         if collisions:

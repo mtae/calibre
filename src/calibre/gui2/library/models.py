@@ -607,7 +607,7 @@ class BooksModel(QAbstractTableModel):  # {{{
             row_ = self.current_highlighted_idx
         else:
             row_ = current_row
-        while True:
+        for i in range(self.count()):
             row_ += 1 if forward else -1
             if row_ < 0:
                 row_ = self.count() - 1
@@ -615,6 +615,9 @@ class BooksModel(QAbstractTableModel):  # {{{
                 row_ = 0
             if self.id(row_) in self.ids_to_highlight_set:
                 break
+        else:
+            # None of the highlighted books are in the model any more
+            return None
         try:
             self.current_highlighted_idx = self.ids_to_highlight.index(self.id(row_))
         except Exception:

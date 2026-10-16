@@ -605,6 +605,8 @@ class FaultInjectionTest(BaseTest):
             pattern
             for (c, pattern) in self.KNOWN_INCONSISTENT
             if c == case.id and pattern != 'normal' and not any(fnmatch.fnmatchcase(f.id, pattern) for f in faults)
+            # The copier that has this fault point is only used on Unix
+            and not (iswindows and fnmatch.fnmatchcase(pattern, 'file:copier.delete_sources*'))
         }
         self.assertFalse(stale, f'KNOWN_INCONSISTENT has entries for faults that are not injected: {sorted(stale)}')
         for fault in faults:

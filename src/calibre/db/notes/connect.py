@@ -100,7 +100,11 @@ class FileTransaction:
 
     def finish(self) -> None:
         self.undo_log = []
-        remove_with_retry(self.staging_dir, is_dir=True)
+        try:
+            remove_with_retry(self.staging_dir, is_dir=True)
+        except Exception:
+            # The transaction is already committed, a leftover staging folder is removed the next time the notes are opened
+            traceback.print_exc()
 
 
 class Notes:

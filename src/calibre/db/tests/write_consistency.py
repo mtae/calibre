@@ -754,8 +754,18 @@ KNOWN_INCONSISTENT = known_table(
     )),
     # Cleaning up the items that are no longer used (and their notes) is done after the books are removed, outside of the savepoint of each book,
     # and failures to remove an empty folder come after the rows were deleted but before the cache was updated
-    ('remove_books', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
+    # remove_books() moves the folders first and deletes the rows of the books that were moved afterwards (a failing book is left in the
+    # database), so a failure of the deletion of the rows leaves books without a folder, and a failure to delete the original folder of a
+    # book that is already in the trash leaves its files behind. copy_tree()/after is an error after the folder was already moved
+    ('remove_books', {'composite-cache', 'folder-missing', 'lost-file', 'orphan-folder'}, (
         'file:copy_tree@1/after',
+    )),
+    ('remove_books', {'orphan-folder'}, (
+        'file:copier.delete_sources@1',
+        'file:copier.delete_sources@2',
+    )),
+    ('remove_books', {'composite-cache', 'folder-missing', 'orphan-folder'}, (
+        'sql:delete from books where id=?@1',
     )),
     ('remove_books', {'ids', 'orphan-folder'}, (
         'file:remove_dir_if_empty@1',

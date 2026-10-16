@@ -3245,11 +3245,12 @@ class Cache:
             change.touch(field.name, books_with_items, None)
             affected_books = field.table.remove_items(item_ids, self.backend, restrict_to_book_ids=restrict_to_book_ids)
             if affected_books:
+                not_dirtied = affected_books
                 if hasattr(field, 'index_field'):
-                    self._set_field(field.index_field.name, {bid: 1.0 for bid in affected_books})
-                # set_field() only marks as dirty the books whose series index changed, which updates their last modified
-                # time, the backup and the caches. All the books lose the series, so mark them all dirty.
-                self._mark_as_dirty(affected_books)
+                    # set_field() marks as dirty only the books whose series index changed, but all of them lose the series
+                    not_dirtied = affected_books - self._set_field(field.index_field.name, {bid: 1.0 for bid in affected_books})
+                if not_dirtied:
+                    self._mark_as_dirty(not_dirtied)
                 change.after_commit(partial(self._clear_link_map_cache, affected_books))
             change.after_commit(partial(self.event_dispatcher, EventType.items_removed, field, affected_books, item_ids))
         return affected_books

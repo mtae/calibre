@@ -2243,6 +2243,8 @@ class DB:
             os.makedirs(path)
         size = 0
         tmp_path = None
+        # A format that is new to the book has no existing file that must survive a failed change
+        is_new = not os.path.lexists(dest) and (current_name is None or not os.path.lexists(os.path.join(path, current_name + fmt)))
         if not (isinstance(stream, str) and stream) and (not getattr(stream, 'name', False) or not samefile(dest, stream.name)):
             # Read the new contents into a temporary file in the same folder before touching the existing format file, so that a
             # stream that fails part way cannot destroy the existing file. It replaces the existing file atomically below.
@@ -2279,14 +2281,14 @@ class DB:
 
             if isinstance(stream, str) and stream:
                 try:
-                    try:
-                        os.replace(stream, dest)
-                    except OSError:
-                        if iswindows:
-                            time.sleep(1)
-                            os.replace(stream, dest)
-                        else:
-                            raise
+                    dest_stat = os.lstat(dest) if tmp_path is not None and os.path.lexists(dest) else None
+                    if dest_stat is None or prepare_replacement_for(dest, dest_stat, stream):
+                        replace_with_retry(stream, dest)
+                    else:
+                        # dest is a link, it has to be overwritten in place to keep the link
+                        with open(stream, 'rb') as src, open(dest, 'wb') as f:
+                            shutil.copyfileobj(src, f)
+                        os.remove(stream)
                 except BaseException:
                     if tmp_path is not None:
                         with suppress(OSError):
@@ -2307,13 +2309,24 @@ class DB:
                     size = os.path.getsize(stream)
             elif os.path.exists(dest):
                 size = os.path.getsize(dest)
-            change.after_commit(finish)
-            if tmp_path is not None:
-                def remove_staged():
-                    with suppress(OSError):
-                        os.remove(tmp_path)
+            if is_new and tmp_path is not None:
+                # The file is put in place now and not after the commit, so that a failure to do so rolls back the row of the
+                # format as well and the database never lists a format that has no file
+                finish()
 
-                change.on_rollback(remove_staged)
+                def remove_new():
+                    with suppress(OSError):
+                        os.remove(dest)
+
+                change.on_rollback(remove_new)
+            else:
+                change.after_commit(finish)
+                if tmp_path is not None:
+                    def remove_staged():
+                        with suppress(OSError):
+                            os.remove(tmp_path)
+
+                    change.on_rollback(remove_staged)
 
         return size, fname
 

@@ -1925,6 +1925,10 @@ icu_normalize(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
         PyErr_SetString(PyExc_ValueError, u_errorName(status));
         goto end;
     }
+    if (n == NULL) {
+        PyErr_SetString(PyExc_ValueError, "Unknown normalization mode");
+        goto end;
+    }
 
     source = python_to_icu(src, &sz);
     if (source == NULL) goto end;

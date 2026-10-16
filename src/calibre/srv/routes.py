@@ -128,8 +128,8 @@ def endpoint[**P](
     # Needs write access to the calibre database
     needs_db_write: bool = False,
 ) -> Callable[[Callable[Concatenate[Context, RequestData, P], Any]], RouteFunction]:
-    from calibre.srv.handler import Context  # noqa
-    from calibre.srv.http_response import RequestData  # noqa
+    from calibre.srv.handler import Context  # noqa: F401
+    from calibre.srv.http_response import RequestData  # noqa: F401
 
     def annotate[**P](f: Callable[Concatenate[Context, RequestData, P], Any]) -> RouteFunction:
         r = route.rstrip('/') or '/'

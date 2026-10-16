@@ -645,10 +645,11 @@ class FieldMetadata:
         self._memo_cache = {}
 
     def memoized(self, name, func):
-        '''
+        """
         Return func(), cached under name until the set of fields changes
-        (_keys_changed()). Used for values derived only from the key set.
-        '''
+        (_keys_changed()). Used for values derived from the entries of
+        _tb_cats, which are only ever added or removed, never changed in place.
+        """
         cache = self._memo_cache
         try:
             return cache[name]

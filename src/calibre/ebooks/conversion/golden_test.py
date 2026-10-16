@@ -271,7 +271,7 @@ def convert(src, dest, cover, extra_args=()):
     from calibre.ebooks.conversion.cli import main
     from calibre.ebooks.oeb import reproducible
 
-    with mock.patch.dict(os.environ, {'SOURCE_DATE_EPOCH': SOURCE_DATE_EPOCH}):
+    with mock.patch.dict(os.environ, {'SOURCE_DATE_EPOCH': SOURCE_DATE_EPOCH, 'CALIBRE_REPRODUCIBLE_IDS': '1'}):
         reproducible.reset()
         out = io.StringIO()
         with redirect_stdout(out), redirect_stderr(out):
@@ -515,7 +515,7 @@ def find_tests():
                     r.datetime_now().isoformat(),
                 )
 
-            with mock.patch.dict(os.environ, {'SOURCE_DATE_EPOCH': '1577923200'}):
+            with mock.patch.dict(os.environ, {'SOURCE_DATE_EPOCH': '1577923200', 'CALIBRE_REPRODUCIBLE_IDS': '1'}):
                 a, b = values(), values()
                 self.assertEqual(a, b)
                 self.assertEqual(a[0], 1577923200)
@@ -524,6 +524,11 @@ def find_tests():
                 self.assertTrue(a[7].startswith('2020-01-02T00:00:00'))
                 r.reset()
                 self.assertNotEqual(str(r.uuid4()), str(r.uuid4()))
+            # SOURCE_DATE_EPOCH alone fixes the time but must not make the identifiers of every book the same
+            with mock.patch.dict(os.environ, {'SOURCE_DATE_EPOCH': '1577923200'}):
+                self.assertEqual(r.epoch_seconds(), 1577923200)
+                self.assertNotEqual(str(r.uuid4()), str(r.uuid4()))
+                self.assertNotEqual(r.random_bytes(20), r.random_bytes(20))
             with mock.patch.dict(os.environ, {'SOURCE_DATE_EPOCH': 'not a number'}):
                 self.assertIsNone(r.source_date_epoch())
             env = {k: v for k, v in os.environ.items() if k != 'SOURCE_DATE_EPOCH'}
@@ -560,7 +565,7 @@ def find_tests():
                 for seed in ('1', '2'):
                     sdir = os.path.join(tdir, seed)
                     os.makedirs(os.path.join(sdir, 'out'))
-                    env = {'PYTHONHASHSEED': seed, 'SOURCE_DATE_EPOCH': SOURCE_DATE_EPOCH}
+                    env = {'PYTHONHASHSEED': seed, 'SOURCE_DATE_EPOCH': SOURCE_DATE_EPOCH, 'CALIBRE_REPRODUCIBLE_IDS': '1'}
                     r = fork_job(
                         'calibre.ebooks.conversion.golden_test',
                         'convert_in_worker',

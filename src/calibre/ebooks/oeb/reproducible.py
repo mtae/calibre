@@ -7,8 +7,9 @@ random ids) injectable, so that tests and reproducible builds can get
 byte-identical output. By default nothing changes: real timestamps and random
 ids are used. If the SOURCE_DATE_EPOCH environment variable
 (https://reproducible-builds.org/specs/source-date-epoch/) is set, it is used as
-the current time and the random values are replaced by values derived from it
-and from the order in which they are requested.
+the current time. The random values are replaced by values derived from it and from the
+order in which they are requested only if CALIBRE_REPRODUCIBLE_IDS is set as well, as books converted
+in separate processes would otherwise all get the same identifiers.
 
 Not covered, because they are not inventions of the conversion code: the
 modification times of the entries in a generated EPUB zip file (taken from the
@@ -35,6 +36,15 @@ def source_date_epoch():
         return None
 
 
+def ids_epoch():
+    """
+    The value the random identifiers are derived from, or None for really random ones. SOURCE_DATE_EPOCH alone (set by build
+    environments such as Nix) must not make the identifiers of every book the same, so the identifiers are only derived from it when
+    CALIBRE_REPRODUCIBLE_IDS is set as well.
+    """
+    return source_date_epoch() if os.environ.get('CALIBRE_REPRODUCIBLE_IDS') else None
+
+
 def reset():
     "Restart the sequence of derived values, for several conversions in one process"
     global _counter
@@ -49,7 +59,7 @@ def epoch_seconds():
 
 def random_bytes(n):
     "n random bytes (used to obfuscate fonts)"
-    sde = source_date_epoch()
+    sde = ids_epoch()
     if sde is None:
         return os.urandom(n)
     seq, ans = next(_counter), b''
@@ -68,7 +78,7 @@ def datetime_now():
 
 def random_uint32():
     "A random unsigned 32 bit number (used for the unique ids in MOBI headers)"
-    sde = source_date_epoch()
+    sde = ids_epoch()
     if sde is None:
         import random
 
@@ -80,7 +90,7 @@ def short_uuid4():
     "Like calibre.utils.short_uuid.uuid4()"
     from calibre.utils import short_uuid
 
-    sde = source_date_epoch()
+    sde = ids_epoch()
     if sde is None:
         return short_uuid.uuid4()
     return short_uuid.uuid5(uuid.NAMESPACE_OID, f'short_uuid4:{sde}:{next(_counter)}')
@@ -88,7 +98,7 @@ def short_uuid4():
 
 def uuid4():
     "A random UUID4 or, if SOURCE_DATE_EPOCH is set, a UUID derived from it"
-    sde = source_date_epoch()
+    sde = ids_epoch()
     if sde is None:
         return uuid.uuid4()
     return uuid.uuid5(uuid.NAMESPACE_OID, f'uuid4:{sde}:{next(_counter)}')

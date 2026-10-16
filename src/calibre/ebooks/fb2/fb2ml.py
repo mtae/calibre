@@ -7,7 +7,6 @@ Transform OEB content into FB2 markup
 import re
 import textwrap
 import uuid
-from datetime import datetime
 from urllib.parse import urlparse
 
 from lxml import etree
@@ -15,6 +14,7 @@ from lxml import etree
 from calibre import prepare_string_for_xml
 from calibre.constants import __appname__, __version__
 from calibre.ebooks.oeb.base import urlnormalize
+from calibre.utils.date import now
 from calibre.utils.img import save_cover_data_to
 from calibre.utils.localization import lang_as_iso639_1
 from calibre.utils.xml_parse import safe_xml_fromstring
@@ -114,7 +114,8 @@ class FB2MLizer:
         metadata['title'] = self.oeb_book.metadata.title[0].value
         metadata['appname'] = __appname__
         metadata['version'] = __version__
-        metadata['date'] = f'{datetime.now().day}.{datetime.now().month}.{datetime.now().year}'  # noqa: DTZ005
+        today = now()
+        metadata['date'] = f'{today.day}.{today.month}.{today.year}'
         if self.oeb_book.metadata.language:
             lc = lang_as_iso639_1(self.oeb_book.metadata.language[0].value)
             if not lc:

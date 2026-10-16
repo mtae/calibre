@@ -2109,7 +2109,7 @@ class KOBOTOUCH(KOBO):
                         kobo_metadata.pubdate = parse_date(DateCreated, assume_utc=True)
                     except Exception:
                         try:
-                            kobo_metadata.pubdate = datetime.strptime(DateCreated, '%Y-%m-%dT%H:%M:%S.%fZ')  # noqa: DTZ007
+                            kobo_metadata.pubdate = datetime.strptime(DateCreated, '%Y-%m-%dT%H:%M:%S.%f%z')
                         except Exception:
                             debug_print(f"KoboTouch:update_booklist - Cannot convert date - DateCreated='{DateCreated}'")
 

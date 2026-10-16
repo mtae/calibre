@@ -26,7 +26,7 @@ from calibre.ebooks.metadata import title_sort
 from calibre.ebooks.metadata.book.base import field_metadata
 from calibre.ebooks.metadata.search_internet import qquote
 from calibre.utils.config import tweaks
-from calibre.utils.date import UNDEFINED_DATE, format_date, now, parse_date
+from calibre.utils.date import UNDEFINED_DATE, format_date, now, parse_date, utc_tz
 from calibre.utils.icu import capitalize, sort_key, strcmp
 from calibre.utils.icu import lower as icu_lower
 from calibre.utils.localization import _, calibre_langcode_to_name, canonicalize_lang
@@ -1820,7 +1820,7 @@ contain ``MMMM``. Using ``format_date_field()`` avoids this problem.
             if format_string == 'to_number':
                 s = parse_date(val).timestamp()
             elif format_string.startswith('from_number'):
-                val = datetime.fromtimestamp(float(val))  # noqa: DTZ006
+                val = datetime.fromtimestamp(float(val), utc_tz)
                 f = format_string[12:]
                 s = format_date(val, f or 'iso')
             else:
@@ -1867,7 +1867,7 @@ format_date_field('#date_read', 'MMM dd, yyyy')
             elif format_string == 'to_number':
                 s = val.timestamp()
             elif format_string.startswith('from_number'):
-                val = datetime.fromtimestamp(float(val))  # noqa: DTZ006
+                val = datetime.fromtimestamp(float(val), utc_tz)
                 f = format_string[12:]
                 s = format_date(val, f or 'iso')
             else:
@@ -3565,7 +3565,7 @@ This function can be used only in the GUI and the content server.
                 if f.relpath == q:
                     val = f.stat_result.st_mtime
                     if format_string:
-                        return format_date(datetime.fromtimestamp(val), format_string)  # noqa: DTZ006
+                        return format_date(datetime.fromtimestamp(val, utc_tz), format_string)
                     return str(val)
             return str(1.0)
         except Exception as e:

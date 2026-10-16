@@ -1379,7 +1379,7 @@ class Manifest:
         item's data may later be set manually via the :attr:`data` attribute.
         """
         item = self.Item(self.oeb, id, href, media_type, fallback, loader, data)
-        self.items.add(item)
+        self.items[item] = None
         self.ids[item.id] = item
         self.hrefs[item.href] = item
         return item
@@ -1391,7 +1391,7 @@ class Manifest:
         del self.ids[item.id]
         if item.href in self.hrefs:
             del self.hrefs[item.href]
-        self.items.remove(item)
+        del self.items[item]
         if item in self.oeb.spine:
             self.oeb.spine.remove(item)
 
@@ -1399,7 +1399,7 @@ class Manifest:
         if item in self.ids:
             item = self.ids[item]
         del self.ids[item.id]
-        self.items.remove(item)
+        del self.items[item]
 
     def generate(self, id=None, href=None):
         """Generate a new unique identifier and/or internal path for use in

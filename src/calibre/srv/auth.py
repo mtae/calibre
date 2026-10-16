@@ -272,6 +272,7 @@ class AuthController:
             if endpoint.android_workaround:
                 data.outcookie[self.ANDROID_COOKIE] = synthesize_nonce(self.key_order, path, self.secret)
                 data.outcookie[self.ANDROID_COOKIE]['path'] = path
+                data.outcookie[self.ANDROID_COOKIE]['httponly'] = True
 
     def validate_android_cookie(self, path, cookie):
         return cookie and validate_nonce(self.key_order, cookie, path, self.secret) and not is_nonce_stale(cookie, self.max_age_seconds)

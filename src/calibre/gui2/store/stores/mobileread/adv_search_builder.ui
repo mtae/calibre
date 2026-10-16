@@ -92,7 +92,7 @@
                <string>This exact &amp;phrase:</string>
               </property>
               <property name="buddy">
-               <cstring>all</cstring>
+               <cstring>phrase</cstring>
               </property>
              </widget>
             </item>
@@ -113,7 +113,7 @@
                <string>&amp;One or more of these words:</string>
               </property>
               <property name="buddy">
-               <cstring>all</cstring>
+               <cstring>any</cstring>
               </property>
              </widget>
             </item>
@@ -143,7 +143,7 @@
                <string>Any of these &amp;unwanted words:</string>
               </property>
               <property name="buddy">
-               <cstring>all</cstring>
+               <cstring>none</cstring>
               </property>
              </widget>
             </item>

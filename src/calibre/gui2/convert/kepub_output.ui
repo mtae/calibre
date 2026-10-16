@@ -103,7 +103,7 @@
       <string>Hyphenation: minimum characters &amp;before:</string>
      </property>
      <property name="buddy">
-      <cstring>opt_kepub_hyphenation_min_chars</cstring>
+      <cstring>opt_kepub_hyphenation_min_chars_before</cstring>
      </property>
     </widget>
    </item>
@@ -120,7 +120,7 @@
       <string>Hyphenation: minimum characters &amp;after:</string>
      </property>
      <property name="buddy">
-      <cstring>opt_kepub_hyphenation_min_chars</cstring>
+      <cstring>opt_kepub_hyphenation_min_chars_after</cstring>
      </property>
     </widget>
    </item>
@@ -137,7 +137,7 @@
       <string>Hyphenation: &amp;limit lines:</string>
      </property>
      <property name="buddy">
-      <cstring>opt_kepub_hyphenation_min_chars</cstring>
+      <cstring>opt_kepub_hyphenation_limit_lines</cstring>
      </property>
     </widget>
    </item>

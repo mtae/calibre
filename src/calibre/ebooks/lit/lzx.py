@@ -23,3 +23,17 @@ class Decompressor:
 
     def reset(self):
         return _lzx.reset()
+
+
+def find_tests():
+    import unittest
+
+    class Test(unittest.TestCase):
+        def test_lzx_empty_huffman_table(self):
+            # A verbatim block whose pretree has all code lengths zero
+            bits = '0' + '001' + f'{64:024b}' + '0' * 80 + '0' * 64
+            bits += '0' * (-len(bits) % 16)
+            data = b''.join(int(bits[i : i + 16], 2).to_bytes(2, 'little') for i in range(0, len(bits), 16))
+            self.assertRaises(LZXError, Decompressor(15).decompress, data, 64)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)

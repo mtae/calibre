@@ -523,6 +523,8 @@ class HTTPConnection(HTTPRequest):
 
     def prepare_response(self, inheaders, request_body_file):
         if self.method == 'TRACE':
+            for name in ('Cookie', 'Authorization', 'Proxy-Authorization'):
+                inheaders.pop(name, all=True)
             msg = force_unicode(self.request_line, 'utf-8') + '\n' + inheaders.pretty()
             return self.simple_response(http.client.OK, msg, close_after_response=False)
         request_body_file.seek(0)

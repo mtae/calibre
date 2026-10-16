@@ -3074,7 +3074,8 @@ class Cache:
                     self.backend.write_backup(path, raw)
                 except Exception:
                     traceback.print_exc()
-        failures = self.backend.remove_books(path_map, permanent=permanent)
+        errors = {}
+        failures = self.backend.remove_books(path_map, permanent=permanent, errors=errors)
         if failures:
             book_ids = tuple(book_id for book_id in path_map if book_id not in failures)
         for field in self.fields.values():
@@ -3090,7 +3091,9 @@ class Cache:
             cc.invalidate(book_ids)
         self.event_dispatcher(EventType.books_removed, book_ids)
         if failures:
-            raise BooksNotRemoved(failures, book_ids)
+            # The first error is the cause, so that callers can still recognize an OSError such as a file that is open in another
+            # program
+            raise BooksNotRemoved(failures, book_ids) from next(iter(errors.values()), None)
 
     _remove_books = remove_books
 

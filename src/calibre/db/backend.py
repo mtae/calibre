@@ -2884,12 +2884,13 @@ class DB:
                     files.append(TrashEntry(book_id, ttitle, (metadata.get('authors') or au)[0], '', mtime, tuple(formats)))
         return books, files
 
-    def remove_books(self, path_map, permanent=False):
+    def remove_books(self, path_map, permanent=False, errors=None):
         """
         Delete the folders of the specified books (or move them to the trash)
         and remove the books from the database. A book whose folder could not be
         deleted or moved is left in the database. Returns a map of book id to
-        error details for such books.
+        error details for such books. If errors is not None it is filled with the
+        exception of each such book.
         """
         import traceback
 
@@ -2907,8 +2908,10 @@ class DB:
                         # files could not be removed from the library folder
                         prints(f'Book {book_id} was moved to the trash but some files were left behind in: {path}')
                         traceback.print_exc()
-                    except Exception:
+                    except Exception as e:
                         failures[book_id] = traceback.format_exc()
+                        if errors is not None:
+                            errors[book_id] = e
                         continue
                     parent_paths.add(os.path.dirname(path))
             removed.append(book_id)

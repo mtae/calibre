@@ -132,7 +132,7 @@ class ResultsList(QTreeWidget):
         result = None
         if item is not None:
             result = item.data(0, Qt.ItemDataRole.UserRole)
-        if result is not None:
+        if isinstance(result, dict):
             name = current_db().get_item_name(result['field'], result['item_id']) or ''
             m.addAction(QIcon.ic('edit_input.png'), _('Edit notes for {}').format(name), partial(self.edit_note, item))
         results = tuple(self.selected_results())
@@ -153,7 +153,11 @@ class ResultsList(QTreeWidget):
         item = self.currentItem()
         if item is None:
             return
-        i = int(item.data(0, Qt.ItemDataRole.UserRole + 1))
+        i = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if i is None:  # a section header is current
+            self.setCurrentItem(self.item_map[-1 if backwards else 0])
+            return
+        i = int(i)
         i += -1 if backwards else 1
         i %= self.number_of_results
         self.setCurrentItem(self.item_map[i])
@@ -519,9 +523,9 @@ class NotesBrowser(Dialog):
             r = item.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(r, dict):
                 ival = r['text'].split('\n', 1)[0].replace('"', '\\"')
-                vals.append(ival)
+                vals.append((r['field'], ival))
         if vals:
-            search_expression = ' OR '.join(f'{r["field"]}:"={ival}"' for ival in vals)
+            search_expression = ' OR '.join(f'{field}:"={ival}"' for field, ival in vals)
             from calibre.gui2.ui import get_gui
 
             get_gui(fail_if_absent=True).search.set_search_string(search_expression)
@@ -589,6 +593,55 @@ class NotesBrowser(Dialog):
             a0.ignore()
             return
         return super().keyPressEvent(a0)
+
+
+def find_tests():
+    import sys
+    import unittest
+    from unittest.mock import MagicMock, patch
+
+    def result_item(field, text, number=None):
+        ans = QTreeWidgetItem()
+        ans.setData(0, Qt.ItemDataRole.UserRole, {'field': field, 'text': text})
+        if number is not None:
+            ans.setData(0, Qt.ItemDataRole.UserRole + 1, number)
+        return ans
+
+    def section_item(field):
+        ans = QTreeWidgetItem()
+        ans.setData(0, Qt.ItemDataRole.UserRole, field)
+        return ans
+
+    class TestNotesBrowser(unittest.TestCase):
+        def test_search_books_mixed_fields(self):
+            browser = MagicMock()
+            browser.results_list.selectedItems.return_value = [
+                result_item('authors', 'Author B\nnote'),
+                section_item('tags'),
+                result_item('tags', 'Say "hi"\nnote'),
+            ]
+            gui = MagicMock()
+            with patch.dict(sys.modules, {'calibre.gui2.ui': MagicMock(get_gui=lambda **kw: gui)}):
+                NotesBrowser.search_books(browser)
+            gui.search.set_search_string.assert_called_once_with('authors:"=Author B" OR tags:"=Say \\"hi\\""')
+
+        def test_show_next_from_section_header(self):
+            results = [result_item('tags', 'a', 0), result_item('tags', 'b', 1), result_item('tags', 'c', 2)]
+            lst = MagicMock()
+            lst.number_of_results = len(results)
+            lst.item_map = results
+            lst.currentItem.return_value = section_item('tags')
+            ResultsList.show_next(lst)
+            lst.setCurrentItem.assert_called_with(results[0])
+            ResultsList.show_next(lst, backwards=True)
+            lst.setCurrentItem.assert_called_with(results[-1])
+            lst.currentItem.return_value = results[1]
+            ResultsList.show_next(lst)
+            lst.setCurrentItem.assert_called_with(results[2])
+            ResultsList.show_next(lst, backwards=True)
+            lst.setCurrentItem.assert_called_with(results[0])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestNotesBrowser)
 
 
 if __name__ == '__main__':

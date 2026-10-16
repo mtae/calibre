@@ -79,7 +79,7 @@ class EmailAccounts(QAbstractTableModel):  # {{{
         elif col == 3:
 
             def key(account_key):
-                return numeric_sort_key(as_unicode(self.accounts[account_key][0]) or '')
+                return bool(self.accounts[account_key][1])
 
         elif col == 4:
 
@@ -177,6 +177,9 @@ class EmailAccounts(QAbstractTableModel):  # {{{
             if not addr or '@' not in na:
                 return False
             self.accounts[na] = self.accounts.pop(account)
+            for d in (self.subjects, self.aliases, self.tags):
+                if account in d:
+                    d[na] = d.pop(account)
             self.account_order[row] = na
             if '@kindle.com' in addr:
                 self.accounts[na][0] = 'EPUB, TPZ'
@@ -310,6 +313,29 @@ class ConfigWidget(ConfigWidgetBase, Ui_Form):
         from calibre.gui2.email import gui_sendmail
 
         gui_sendmail.calculate_rate_limit()
+
+
+def find_tests():
+    import unittest
+
+    class TestEmailAccounts(unittest.TestCase):
+        def test_rename_account_moves_settings(self):
+            old, new = 'a@example.com', 'b@example.com'
+            m = EmailAccounts({old: ['EPUB', True, True]}, {old: 'My subject'}, {old: 'Alice'}, {old: 'tagx'})
+            role = Qt.ItemDataRole.EditRole
+            self.assertTrue(m.setData(m.index(0, 0), new, role))
+            self.assertEqual([m.data(m.index(0, c), role) for c in (0, 2, 4, 5)], [new, 'My subject', 'Alice', 'tagx'])
+            for d in (m.accounts, m.subjects, m.aliases, m.tags):
+                self.assertEqual(list(d), [new])
+        def test_sort_by_auto_send(self):
+            accounts = {'a@x.com': ['AZW3', True, False], 'b@x.com': ['EPUB', False, False], 'c@x.com': ['MOBI', True, False]}
+            model = EmailAccounts(accounts, {})
+            model.sort(3, Qt.SortOrder.AscendingOrder)
+            self.assertEqual(model.account_order, ['b@x.com', 'a@x.com', 'c@x.com'], 'unchecked rows come first')
+            model.sort(3, Qt.SortOrder.DescendingOrder)
+            self.assertEqual(model.account_order, ['a@x.com', 'c@x.com', 'b@x.com'], 'checked rows come first')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestEmailAccounts)
 
 
 if __name__ == '__main__':

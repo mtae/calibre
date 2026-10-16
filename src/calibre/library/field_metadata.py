@@ -549,6 +549,7 @@ class FieldMetadata:
 
     def __init__(self):
         self._field_metadata = _builtin_field_metadata()
+        self._memo_cache = {}  # derived key lists, cleared by _keys_changed() whenever _tb_cats changes
         self._tb_cats = OrderedDict()
         self._tb_custom_fields = {}
         self._search_term_map = {}
@@ -576,6 +577,7 @@ class FieldMetadata:
 
     def __delitem__(self, key):
         del self._tb_cats[key]
+        self._keys_changed()
 
     def __iter__(self):
         yield from self._tb_cats
@@ -638,16 +640,34 @@ class FieldMetadata:
     def standard_field_keys(self):
         return [k for k in self._tb_cats.keys() if self._tb_cats[k]['kind'] == 'field' and not self._tb_cats[k]['is_custom']]
 
+    def _keys_changed(self):
+        # Every code path that adds or removes an entry of _tb_cats must call this
+        self._memo_cache = {}
+
+    def memoized(self, name, func):
+        '''
+        Return func(), cached under name until the set of fields changes
+        (_keys_changed()). Used for values derived only from the key set.
+        '''
+        cache = self._memo_cache
+        try:
+            return cache[name]
+        except KeyError:
+            ans = cache[name] = func()
+            return ans
+
     def custom_field_keys(self, include_composites=True):
-        res = []
-        for k in self._tb_cats.keys():
-            fm = self._tb_cats[k]
-            if fm['kind'] == 'field' and fm['is_custom'] and (fm['datatype'] != 'composite' or include_composites):
-                res.append(k)
-        return res
+        def compute():
+            res = []
+            for k in self._tb_cats.keys():
+                fm = self._tb_cats[k]
+                if fm['kind'] == 'field' and fm['is_custom'] and (fm['datatype'] != 'composite' or include_composites):
+                    res.append(k)
+            return tuple(res)
+        return list(self.memoized(('custom_field_keys', bool(include_composites)), compute))
 
     def all_field_keys(self):
-        return [k for k in self._tb_cats.keys() if self._tb_cats[k]['kind'] == 'field']
+        return list(self.memoized('all_field_keys', lambda: tuple(k for k in self._tb_cats.keys() if self._tb_cats[k]['kind'] == 'field')))
 
     def iterkeys(self):
         yield from self._tb_cats
@@ -742,6 +762,7 @@ class FieldMetadata:
             'is_editable': is_editable,
         }
         self._tb_custom_fields[key] = self._tb_cats[key]
+        self._keys_changed()
         self._add_search_terms_to_map(key, [key])
         self.custom_label_to_key_map[label] = key
         if datatype == 'series':
@@ -764,6 +785,7 @@ class FieldMetadata:
                 'is_editable': False,
                 'is_csp': False,
             }
+            self._keys_changed()
             self._add_search_terms_to_map(key, [key])
             self.custom_label_to_key_map[label + '_index'] = key
 
@@ -775,6 +797,7 @@ class FieldMetadata:
                     if k in self._search_term_map:
                         del self._search_term_map[k]
                 del self._tb_cats[key]
+                self._keys_changed()
 
     def remove_user_categories(self):
         for key in list(self._tb_cats.keys()):
@@ -784,6 +807,7 @@ class FieldMetadata:
                     if k in self._search_term_map:
                         del self._search_term_map[k]
                 del self._tb_cats[key]
+                self._keys_changed()
 
     def _remove_grouped_search_terms(self):
         to_remove = [v for v in self._search_term_map if isinstance(self._search_term_map[v], list)]
@@ -819,6 +843,7 @@ class FieldMetadata:
             'is_category': True,
             'is_csp': False,
         }
+        self._keys_changed()
         self._add_search_terms_to_map(label, st)
 
     def add_search_category(self, label, name, fail_on_existing=True):
@@ -838,6 +863,7 @@ class FieldMetadata:
             'is_category': True,
             'is_csp': False,
         }
+        self._keys_changed()
 
     def set_field_record_index(self, label, index, prefer_custom=False):
         if prefer_custom:
@@ -891,4 +917,5 @@ def fm_from_dict(src):
     for q in ('custom_fields', 'user_categories', 'search_categories'):
         for k, v in src[q].items():
             ans._tb_cats[k] = v
+    ans._keys_changed()
     return ans

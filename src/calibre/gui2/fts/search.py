@@ -365,7 +365,7 @@ class ResultsModel(QAbstractItemModel):
         if idx is not None:
             self.beginRemoveRows(ROOT, idx, idx)
             del self.results[idx]
-            del self.result_map[book_id]
+            self.result_map = {r.book_id: i for i, r in enumerate(self.results)}
             self.endRemoveRows()
             self.matches_found.emit(len(self.results))
             return True
@@ -1243,6 +1243,22 @@ def develop(view='cards'):
         w.sip.search_button.click()
         d.exec()
     del app
+
+
+def find_tests():
+    import unittest
+
+    class TestResultsModel(unittest.TestCase):
+        def test_remove_book_keeps_result_map_in_sync(self):
+            model = ResultsModel()
+            model.results = [Results(book_id) for book_id in (10, 20, 30)]
+            model.result_map = {r.book_id: i for i, r in enumerate(model.results)}
+            self.assertTrue(model.remove_book(10))
+            self.assertFalse(model.remove_book(10))
+            self.assertEqual(model.result_map, {20: 0, 30: 1})
+            self.assertEqual(model.results[model.result_map[30]].book_id, 30)
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestResultsModel)
 
 
 if __name__ == '__main__':

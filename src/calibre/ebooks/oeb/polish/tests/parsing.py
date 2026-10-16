@@ -215,6 +215,22 @@ class ParsingTests(BaseTest):
         root = parse('<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-US" xmlns:extra="extra"><body/></html>')
         self.assertIn('extra', root.nsmap, 'Extra namespace declaration on <html> tag not preserved')
 
+    def test_private_entities(self):
+        "Test handling of entities defined in the DOCTYPE"
+        from calibre.ebooks.oeb.polish.parsing import handle_private_entities
+
+        for decl, expected in (
+            ('<!ENTITY a "v">', 'v'),
+            ('<!ENTITY a "v" >', 'v'),
+            ("<!ENTITY a 'v'>", 'v'),
+            ('<!ENTITY a "<b>bold</b>">', '<b>bold</b>'),
+            ("<!ENTITY a '<b>bold</b>' >", '<b>bold</b>'),
+            ('<!ENTITY a "it\'s">', "it's"),
+        ):
+            raw = f'<?xml version="1.0"?>\n<!DOCTYPE html [\n{decl}\n]>\n<html><body><p>[&a;]</p></body></html>'
+            actual = handle_private_entities(raw).partition('<p>')[2].partition('</p>')[0]
+            self.assertEqual(f'[{expected}]', actual, f'Private entity {decl} not handled')
+
 
 def timing():
     import sys

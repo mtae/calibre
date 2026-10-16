@@ -1416,6 +1416,10 @@ class ReadingTest(BaseTest):
         v = formatter.safe_format('program: book_values("rating", "title:true", ",", 0)', {}, 'TEMPLATE ERROR', mi)
         self.assertEqual(set(v.split(',')), {'4', '6'})
 
+        # test extra_file_modtime for a file that does not exist
+        v = formatter.safe_format('program: extra_file_modtime("missing.txt", "")', {}, 'TEMPLATE ERROR', mi)
+        self.assertEqual(v, '-1')
+
     # }}}
 
     @unittest.skipIf(os.environ.get('CALIBRE_ALLOW_PYTHON_TEMPLATES', '1') != '1', 'Python templates disallowed')

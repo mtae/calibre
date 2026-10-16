@@ -479,10 +479,13 @@ class Textile:
         return re.compile(r'<(p)([^>]*?)>(.*)(</\1>)', re.S).sub(self.doBr, in_)
 
     def doBr(self, match):
+        # (.+) takes the whole line (. does not match a line break), so it can never give back characters:
+        # possessive. A match starts at the start of a line, so a long line that does not match is not
+        # scanned from every character.
         if self.html_type == 'html':
-            content = re.sub(r'(.+)(?:(?<!<br>)|(?<!<br />))\n(?![#*\s|])', '\\1<br>', match.group(3))
+            content = re.sub(r'(?<![^\n])(.++)(?:(?<!<br>)|(?<!<br />))\n(?![#*\s|])', '\\1<br>', match.group(3))
         else:
-            content = re.sub(r'(.+)(?:(?<!<br>)|(?<!<br />))\n(?![#*\s|])', '\\1<br />', match.group(3))
+            content = re.sub(r'(?<![^\n])(.++)(?:(?<!<br>)|(?<!<br />))\n(?![#*\s|])', '\\1<br />', match.group(3))
         return f'<{match.group(1)}{match.group(2)}>{content}{match.group(4)}'
 
     def block(self, text, head_offset=0):

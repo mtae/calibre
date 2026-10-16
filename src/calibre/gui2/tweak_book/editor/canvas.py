@@ -551,7 +551,7 @@ class Canvas(QWidget):
                 if not is_equal(new_width, r.width()):
                     new_height = r.width() * (orig_rect.height() / orig_rect.width())
                     delta = r.height() - new_height
-                    r.setTop(r.top() + delta) if hedge == 'top' else r.setBottom(r.bottom() - delta)
+                    r.setTop(r.top() + delta) if vedge == 'top' else r.setBottom(r.bottom() - delta)
         else:
             buf = 50
 
@@ -810,6 +810,24 @@ class Canvas(QWidget):
             p.end()
 
     # }}}
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    class TestCanvas(unittest.TestCase):
+        def test_preserve_aspect_ratio_moves_dragged_top_edge(self):
+            # The top edge was dragged up, but the selection is as wide as the
+            # image so the width cannot grow to match: the top edge must be
+            # the one to give way, not the bottom edge.
+            canvas = SimpleNamespace(
+                target=QRectF(0, 0, 100, 100), selection_state=SimpleNamespace(rect=QRectF(0, 0, 100, 70)))
+            Canvas.preserve_aspect_ratio_after_move(canvas, QRectF(0, 20, 100, 50), None, 'top')
+            r = canvas.selection_state.rect
+            self.assertEqual((r.top(), r.bottom()), (20, 70))
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestCanvas)
 
 
 if __name__ == '__main__':

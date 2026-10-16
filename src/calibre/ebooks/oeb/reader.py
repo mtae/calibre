@@ -9,7 +9,6 @@ import io
 import os
 import re
 import sys
-import uuid
 from collections import defaultdict
 from typing import cast
 from urllib.parse import urldefrag, urlparse
@@ -48,6 +47,7 @@ from calibre.ebooks.oeb.base import (
     xml2text,
     xpath,
 )
+from calibre.ebooks.oeb.reproducible import uuid4
 from calibre.ebooks.oeb.writer import OEBWriter
 from calibre.ptempfile import TemporaryDirectory
 from calibre.utils.cleantext import clean_xml_chars
@@ -169,7 +169,7 @@ class OEBReader:
             mi.book_producer = '{a} ({v}) [http://{a}-ebook.com]'.format(**dict(a=__appname__, v=__version__))
         meta_info_to_oeb_metadata(mi, self.oeb.metadata, self.logger)
         m = self.oeb.metadata
-        m.add('identifier', str(uuid.uuid4()), id='uuid_id', scheme='uuid')
+        m.add('identifier', str(uuid4()), id='uuid_id', scheme='uuid')
         self.oeb.uid = self.oeb.metadata.identifier[-1]
         if not m.title:
             m.add('title', self.oeb.translate(__('Unknown')))
@@ -539,14 +539,15 @@ class OEBReader:
         toc = self.oeb.toc
         titles = []
         headers = []
+        items = []
         for item in self.oeb.spine:
             if not item.linear:
                 continue
+            items.append(item)
             html = item.data
             title = ''.join(xpath(html, '/h:html/h:head/h:title/text()'))
             title = COLLAPSE_RE.sub(' ', title.strip())
-            if title:
-                titles.append(title)
+            titles.append(title)
             headers.append('(unlabeled)')
             for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'strong'):
                 expr = '/h:html/h:body//h:%s[position()=1]/text()'
@@ -556,11 +557,9 @@ class OEBReader:
                     headers[-1] = header
                     break
         use = titles
-        if len(titles) > len(set(titles)):
+        if '' in titles or len(titles) > len(set(titles)):
             use = headers
-        for title, item in zip(use, self.oeb.spine):
-            if not item.linear:
-                continue
+        for title, item in zip(use, items):
             toc.add(title, item.href)
         return True
 
@@ -740,6 +739,35 @@ def main(argv=sys.argv):
         for name, doc in oeb.to_opf2(page_map=True).values():
             print(etree.tostring(doc, pretty_print=True))
     return 0
+
+
+def find_tests():
+    import unittest
+
+    class Test(unittest.TestCase):
+        def test_toc_from_spine(self):
+            from calibre.ebooks.oeb.base import XHTML_NS
+            from calibre.utils.logging import default_log
+
+            def toc_of(*pages):
+                oeb = OEBBook(default_log)
+                for name, title, linear in pages:
+                    html = f'<html xmlns="{XHTML_NS}"><head><title>{title}</title></head><body><h1>H{name}</h1></body></html>'
+                    item = oeb.manifest.add(name, name + '.html', XHTML_MIME, data=safe_xml_fromstring(html))
+                    oeb.spine.add(item, linear)
+                reader = OEBReader()
+                reader.oeb, reader.log = oeb, default_log
+                reader._toc_from_spine(None)
+                return [(x.title, x.href) for x in oeb.toc]
+
+            # A non-linear page must not shift the later titles onto the wrong pages
+            self.assertEqual(
+                toc_of(('a', 'A', True), ('b', 'B', False), ('c', 'C', True), ('d', 'D', True)), [('A', 'a.html'), ('C', 'c.html'), ('D', 'd.html')]
+            )
+            # Nor must a page without a title
+            self.assertEqual(toc_of(('a', 'A', True), ('b', '', True), ('c', 'C', True)), [('Ha', 'a.html'), ('Hb', 'b.html'), ('Hc', 'c.html')])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(Test)
 
 
 if __name__ == '__main__':

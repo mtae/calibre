@@ -214,6 +214,7 @@ class Central(QStackedWidget):  # {{{
             return base.eventFilter(a0, a1)
         if a1.button() == Qt.MouseButton.MiddleButton:
             self._close_requested(index)
+            return True
         ed = self.editor_tabs.widget(index)
         if ed is not None:
             menu = QMenu(self)

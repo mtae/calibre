@@ -451,7 +451,7 @@ class EPUBInput(InputFormatPlugin):
             base_path = os.path.dirname(nav_path)
             for elem in root.xpath('//*[@href]'):
                 href, frag = elem.get('href').partition('#')[::2]
-                link_path = os.path.relpath(os.path.join(base_path, urlunquote(href)), base_path)
+                link_path = os.path.relpath(os.path.join(base_path, urlunquote(href))).replace(os.sep, '/')
                 abs_href = urlnormalize(link_path)
                 if abs_href == self.removed_cover:
                     changed = True
@@ -471,3 +471,41 @@ class EPUBInput(InputFormatPlugin):
             spine = {x.href for x in oeb.spine}
             if cover_toc_item is not None and cover_toc_item not in spine:
                 oeb.toc.item_that_refers_to_cover = cover_toc_item
+
+
+def find_tests():
+    import unittest
+    from types import SimpleNamespace
+
+    from calibre import CurrentDir
+    from calibre.ebooks.metadata.opf2 import OPF
+    from calibre.ptempfile import TemporaryDirectory
+
+    class EPUBInputTest(unittest.TestCase):
+        def test_removed_titlepage_marked_in_nav_in_subdir(self):
+            nav = (
+                '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>'
+                '<nav epub:type="toc"><ol><li><a href="Text/cover.xhtml">Cover</a></li>'
+                '<li><a href="Text/ch1.xhtml">One</a></li></ol></nav></body></html>'
+            )
+            opf = (
+                '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">'
+                '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier>'
+                '<dc:title>t</dc:title></metadata><manifest/><spine/></package>'
+            )
+            with TemporaryDirectory() as tdir, CurrentDir(tdir):
+                os.mkdir('OEBPS')
+                with open('OEBPS/nav.xhtml', 'w', encoding='utf-8') as f:
+                    f.write(nav)
+                with open('content.opf', 'w', encoding='utf-8') as f:
+                    f.write(opf)
+                plugin = EPUBInput(None)
+                # Manifest hrefs, and so removed_cover, are relative to the extracted EPUB root
+                plugin.removed_cover = 'OEBPS/Text/cover.xhtml'
+                plugin.convert_epub3_nav('OEBPS/nav.xhtml', OPF('content.opf', tdir), None, SimpleNamespace())
+                with open('OEBPS/nav.xhtml', encoding='utf-8') as f:
+                    marked = f.read()
+            self.assertEqual(marked.count('data-calibre-removed-titlepage'), 1)
+            self.assertRegex(marked, r'<a [^>]*data-calibre-removed-titlepage="1"[^>]*>Cover</a>')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(EPUBInputTest)

@@ -317,6 +317,38 @@ class Structure(BaseTest):
         self.assertEqual('a.html', find_cover_page(c))
         self.assertEqual('a.html', next(c.spine_names)[0])
 
+    def test_remove_unused_images_keeps_cover(self):
+        from calibre.ebooks.oeb.polish.images import remove_unused_images
+
+        page = cmi('a.html', '<p>text</p>')
+        for ver, kw in (
+            (2, {'meta_cover': 'cover.png'}),
+            (3, {'meta_cover': 'cover.png'}),
+            (3, {}),
+            (2, {'guide': [('cover.png', 'cover', '')]}),
+        ):
+            c = self.create_epub([page, cmi('cover.png', b'z', 'cover-image' if ver == 3 and not kw else None), cmi('unused.png')], ver=ver, **kw)
+            self.assertTrue(remove_unused_images(c))
+            self.assertFalse(c.has_name('unused.png'))
+            self.assertTrue(c.has_name('cover.png'), f'{ver=} {kw=}')
+            self.assertEqual('cover.png', find_cover_image(c, strict=True), f'{ver=} {kw=}')
+
+    def test_remove_unused_images_follows_references(self):
+        from calibre.ebooks.oeb.polish.images import remove_unused_images
+
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="in_svg.png"/></svg>'
+        c = self.create_epub([
+            cmi('a.html', '<head><link rel="stylesheet" href="a.css"/></head><body><p><img src="a.svg"/></p></body>'),
+            cmi('a.css', '@import "b.css";'),
+            cmi('b.css', 'p { background: url(in_imported_css.png) }'),
+            cmi('a.svg', svg),
+            cmi('in_svg.png'),
+            cmi('in_imported_css.png'),
+            cmi('unused.png'),
+        ])
+        self.assertTrue(remove_unused_images(c))
+        self.assertEqual({'in_svg.png', 'in_imported_css.png'}, {name for name in c.mime_map if name.endswith('.png')})
+
     def test_mark_sentences(self):
         from html5_parser import parse
         from lxml import html
@@ -355,6 +387,8 @@ class Structure(BaseTest):
                 '<p>Here is some <b>bold, </b><i>italic, </i><u>underline, </u> text.': '<body>'
                 '<p><span id="1">Here is some <b>bold, </b><i>italic, </i><u>underline, </u> text.</span></p>',
                 '<p>A sentence wrapped\nonto multiple lines.': '<body><p><span id="1">A sentence wrapped\nonto multiple lines.</span></p>',
+                '<div data-calibre-tts="__skip__"><p>Skipped <b>bold</b> tail text.</p></div><p>Kept.': '<body><div data-calibre-tts="__skip__">'
+                '<p>Skipped <b>bold</b> tail text.</p></div><p><span id="1">Kept.</span></p>',
             }.items()
         ):
             root = parse(text, namespace_elements=True)
@@ -393,6 +427,21 @@ class Structure(BaseTest):
         parse_errors = [XMLParseError('x', 'a.html'), CSSParseError('x', 'a.css')]
         self.assertFalse(any(e.can_be_skipped for e in parse_errors))
         self.assertEqual(remove_skipped(parse_errors, frozenset(e.rule_id for e in parse_errors)), parse_errors)
+
+    def test_check_encoding_declarations(self):
+        from calibre.ebooks.chardet import find_declared_encoding
+        from calibre.ebooks.oeb.polish.check.parsing import NonUTF8, check_encoding_declarations
+
+        def html(enc):
+            return f'<?xml version="1.0" encoding="{enc}"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body/></html>'
+
+        for raw in (html('iso-8859-1'), html('iso-8859-1').encode('ascii')):
+            self.assertEqual(find_declared_encoding(raw), 'iso-8859-1')
+        self.assertIsNone(find_declared_encoding('<html><body/></html>'))
+        c = self.create_epub([cmi('a.html', html('iso-8859-1')), cmi('b.html', html('utf-8'))])
+        errors = check_encoding_declarations('a.html', c)
+        self.assertEqual([type(e) for e in errors], [NonUTF8])
+        self.assertFalse(check_encoding_declarations('b.html', c))
 
     def test_invalid_id_fix(self):
         from calibre.ebooks.oeb.polish.check.main import fix_errors
@@ -483,6 +532,145 @@ class Structure(BaseTest):
         self.assertFalse(root.xpath('//*/@aria-describedby'))
         self.assertEqual(root.xpath('//*/@headers'), ['c'])
         self.assertFalse(root.xpath('//*/@for'))
+
+    def test_do_split_inplace(self):
+        # do_split_inplace() must give exactly the same trees as do_split()
+        import copy
+        import random
+
+        from lxml import etree
+
+        from calibre.ebooks.oeb.polish.split import do_split, do_split_inplace
+        from calibre.utils.logging import default_log
+
+        ns = 'http://www.w3.org/1999/xhtml'
+        texts = ['', None, ' ', '\n', 'txt ', ' words here', '\n\n  x ']
+        tags = ['div', 'p', 'span', 'h2', 'a', 'ul', 'li', 'table', 'td', 'i', 'pre', 'br']
+
+        def build(r):
+            def mk(parent, depth):
+                for _ in range(r.randint(0, 4 if depth < 5 else 1)):
+                    if r.random() < 0.1:
+                        c = etree.Comment('c')
+                        parent.append(c)
+                    else:
+                        c = etree.SubElement(parent, f'{{{ns}}}{r.choice(tags)}')
+                        c.text = r.choice(texts)
+                        mk(c, depth + 1)
+                    c.tail = r.choice(texts)
+
+            html = etree.Element(f'{{{ns}}}html', nsmap={None: ns})
+            etree.SubElement(etree.SubElement(html, f'{{{ns}}}head'), f'{{{ns}}}title').text = 'T'
+            body = etree.SubElement(html, f'{{{ns}}}body')
+            body.text = r.choice(texts)
+            mk(body, 0)
+            return etree.ElementTree(html)
+
+        def ser(t):
+            return etree.tostring(t, encoding='utf-8')
+
+        def pick(r, tree):
+            elems = list(tree.getroot().find(f'{{{ns}}}body').iterdescendants(f'{{{ns}}}*'))
+            return tree.getpath(r.choice(elems)) if elems else None
+
+        for seed in range(300):
+            r = random.Random(seed)
+            base = build(r)
+            for before in (True, False):
+                # The second split is done on the remaining tree, as when splitting on many page breaks
+                t, t_old = copy.deepcopy(base), copy.deepcopy(base)
+                for _ in range(2):
+                    path = pick(r, t)
+                    if path is None:
+                        break
+                    old = do_split(t_old.xpath(path)[0], default_log, before=before)
+                    new = do_split_inplace(t, t.xpath(path)[0], default_log, before=before)
+                    self.assertIsNotNone(new)
+                    self.assertIs(new[1], t)
+                    for o, n in zip(old, new):
+                        self.assertEqual(ser(o), ser(n), f'seed={seed} before={before} path={path}')
+                    t_old = old[1]
+
+    def test_split_on_page_breaks(self):
+        # Splitting on page breaks must keep giving these parts
+        import re
+
+        from lxml import etree
+
+        from calibre.ebooks.oeb.base import XPath
+        from calibre.ebooks.oeb.transforms.split import FlowSplitter
+        from calibre.utils.logging import default_log
+
+        ns = 'http://www.w3.org/1999/xhtml'
+        cases = (
+            ('intro<h1 id="t">T</h1><p>one</p><div class="a"><p id="b1">two</p>x<p>three</p></div><h2 id="b2">H</h2>tail<p>four</p>' +
+             '<div><div><p id="b3">five</p>six</div>seven</div>',
+             (('b1', True), ('b2', True), ('b3', False)),
+             ['<body>intro<h1 id="t">T</h1><p>one</p></body>',
+              '<body>\n<div class="a"><p id="b1">two</p>x<p>three</p></div></body>',
+              '<body>\n<h2 id="b2">H</h2>tail<p>four</p><div><div><p id="b3">five</p>\n</div>seven</div></body>',
+              '<body>\n<div>\n<div>\nsix</div>seven</div></body>']),
+            ('<h1 id="x">A</h1><p>one</p><h1 id="y">B</h1><p>two</p>', (('x', True), ('y', True)),
+             ['<body>\n<h1 id="x">A</h1><p>one</p></body>', '<body>\n<h1 id="y">B</h1><p>two</p></body>']),
+            ('<p id="d">1</p><p id="m">2</p><p id="d">3</p><p>4</p>', (('m', True), ('d', False)),
+             ['<body><p id="d">1</p>\n</body>', '<body>\n<p id="m">2</p><p id="d">3</p><p>4</p></body>']),
+            ('<div><p id="a">1</p><p>2</p></div><div id="c"><p>3</p><p id="e">4</p></div><p>5</p>',
+             (('a', False), ('c', True), ('e', True)),
+             ['<body><div><p id="a">1</p>\n</div></body>', '<body>\n<div>\n<p>2</p></div></body>',
+              '<body>\n<div id="c"><p>3</p></div></body>', '<body>\n<div id="c">\n<p id="e">4</p></div><p>5</p></body>']),
+            # Only the part before the break is left, the item's data must not have been changed by the split
+            ('<div class="g"><section id="s"><figure id="f"><img src="a.jpg"/></figure></section></div>', (('f', False),),
+             ['<body><div class="g"><section id="s"><figure id="f"><img src="a.jpg"/></figure>\n</section></div></body>']),
+        )
+        for body, breaks, expected in cases:
+            root = etree.fromstring(f'<html xmlns="{ns}"><head><title>t</title></head><body>{body}</body></html>')
+            splitter = FlowSplitter.__new__(FlowSplitter)
+            splitter.log = default_log
+            splitter.page_break_ids = [x for x, before in breaks]
+            splitter.page_breaks = [(XPath(f'//*[@id="{x}"]'), before) for x, before in breaks]
+            orig = etree.tostring(root)
+            splitter.split_on_page_breaks(root.getroottree())
+            self.assertEqual(etree.tostring(root), orig, 'The tree being split was modified')
+            parts = [re.sub(r'\s*xmlns="[^"]+"', '', etree.tostring(t.getroot().find(f'{{{ns}}}body'), encoding='unicode')) for t in splitter.trees]
+            self.assertEqual(parts, expected, body)
+
+    def test_empty_nav_is_warning(self):
+        from calibre.ebooks.oeb.polish.check.base import WARN
+        from calibre.ebooks.oeb.polish.check.opf import EmptyNav, check_opf
+
+        nav = (
+            '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+            '<body><nav epub:type="toc"><ol/></nav></body></html>'
+        )
+        c = self.create_epub([cmi('nav.html', nav, 'nav')])
+        errors = [e for e in check_opf(c) if isinstance(e, EmptyNav)]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].level, WARN)
+
+    def test_compress_webp_uses_webp_quality(self):
+        from queue import Queue
+        from threading import Event
+        from unittest.mock import patch
+
+        from calibre.ebooks.oeb.polish.images import Worker
+
+        path = os.path.join(self.tdir, 'a.webp')
+        with open(path, 'wb') as f:
+            f.write(b'x')
+        abort = Event()
+        abort.set()  # the worker thread exits at once, we call compress() directly
+        worker = Worker(abort, 'test', Queue(), {}, 90, 40, lambda name: None)
+        with patch('calibre.utils.img.encode_webp') as encode_webp:
+            worker.compress('a.webp', path, 'image/webp')
+        self.assertEqual(encode_webp.call_args.kwargs['quality'], 40)
+
+    def test_toc_from_links_removes_consecutive_dead_links(self):
+        from calibre.ebooks.oeb.polish.toc import from_links
+
+        links = ''.join(f'<a href="missing{x}.html">{x}</a>' for x in 'abc')
+        body = f'<body><p>{links}<a href="#t">d</a></p><h1 id="t">T</h1></body>'
+        c = self.create_epub([cmi('index.html', f'<html xmlns="http://www.w3.org/1999/xhtml">{body}</html>', None)])
+        self.assertEqual([x.title for x in from_links(c)], ['d'])
 
 
 def find_tests():

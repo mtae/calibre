@@ -86,7 +86,7 @@ class Matches(QAbstractItemModel):
 
     def toggle_plugin(self, index):
         new_index = self.createIndex(index.row(), 0)
-        data = Qt.CheckState.Unchecked if is_disabled(self.get_plugin(index)) else Qt.CheckState.Checked
+        data = Qt.CheckState.Checked if is_disabled(self.get_plugin(index)) else Qt.CheckState.Unchecked
         self.setData(new_index, data, Qt.ItemDataRole.CheckStateRole)
 
     def index(self, row, column, parent=QModelIndex()):
@@ -314,3 +314,26 @@ class SearchFilter(SearchQueryParser):
 
                     traceback.print_exc()
         return matches
+
+
+def find_tests():
+    import unittest
+    from unittest.mock import patch
+
+    class TestMatches(unittest.TestCase):
+        def test_toggle_plugin(self):
+            disabled = {'b'}
+            model = Matches(['a', 'b', 'c'])
+            with (
+                patch(f'{__name__}.is_disabled', lambda p: p in disabled),
+                patch(f'{__name__}.enable_plugin', disabled.discard),
+                patch(f'{__name__}.disable_plugin', disabled.add),
+            ):
+                model.toggle_plugin(model.createIndex(1, 1))
+                self.assertEqual(disabled, set())
+                model.toggle_plugin(model.createIndex(0, 0))
+                self.assertEqual(disabled, {'a'})
+                model.enable_invert()
+                self.assertEqual(disabled, {'b', 'c'})
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestMatches)

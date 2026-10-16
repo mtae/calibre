@@ -70,7 +70,7 @@ class PICO(NEWSMY):
     VENDOR_NAME = ['TECLAST', 'IMAGIN', 'LASER-', 'LASER', '']
     WINDOWS_MAIN_MEM = WINDOWS_CARD_A_MEM = ['USBDISK__USER', 'EB720', 'EBOOK-EB720']
     EBOOK_DIR_MAIN = 'Books'
-    FORMATS = ['EPUB', 'FB2', 'TXT', 'LRC', 'PDB', 'PDF', 'HTML', 'WTXT']
+    FORMATS = ['epub', 'fb2', 'txt', 'lrc', 'pdb', 'pdf', 'html', 'wtxt']
     SCAN_FROM_ROOT = True
 
 
@@ -127,3 +127,20 @@ class WEXLER(TECLAST_K3):
 
     VENDOR_NAME = 'WEXLER'
     WINDOWS_MAIN_MEM = WINDOWS_CARD_A_MEM = 'T7001'
+
+
+def find_tests():
+    import unittest
+
+    from calibre.ebooks.metadata.meta import path_to_ext
+
+    class TestTeclast(unittest.TestCase):
+        def test_formats_to_scan_for(self):
+            for cls in list(globals().values()):
+                if isinstance(cls, type) and issubclass(cls, TECLAST_K3) and cls.__module__ == __name__:
+                    scan_for = cls(None).formats_to_scan_for()
+                    for fmt in cls.FORMATS:
+                        # path_to_ext() returns lower case extensions
+                        self.assertIn(path_to_ext('book.' + fmt.upper()), scan_for, f'{cls.__name__} does not scan for {fmt}')
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestTeclast)

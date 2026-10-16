@@ -11,6 +11,7 @@ import stat
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from contextlib import closing, suppress
 from datetime import datetime
@@ -24,6 +25,7 @@ from calibre.constants import builtin_colors_light, builtin_decorations, filesys
 from calibre.db import SPOOL_SIZE, FTSQueryError
 from calibre.db.annotations import annot_db_data, unicode_normalize
 from calibre.db.book_storage import BookStorageEntry, InvalidBookStorage, validate_book_storage
+from calibre.db.change import ChangeRecord
 from calibre.db.constants import (
     BOOK_ID_PATH_TEMPLATE,
     COVER_FILE_NAME,
@@ -55,7 +57,7 @@ from calibre.library.field_metadata import FieldMetadata
 from calibre.ptempfile import PersistentTemporaryFile, TemporaryFile
 from calibre.utils import pickle_binary_string, unpickle_binary_string
 from calibre.utils.config import from_json, prefs, to_json, tweaks
-from calibre.utils.copy_files import SourceDeletionFailed, copy_files, copy_tree, rename_files, windows_check_if_files_in_use
+from calibre.utils.copy_files import WINDOWS_SLEEP_FOR_RETRY_TIME, SourceDeletionFailed, copy_files, copy_tree, rename_files, windows_check_if_files_in_use
 from calibre.utils.date import EPOCH, parse_date, utcfromtimestamp, utcnow
 from calibre.utils.filenames import (
     ascii_filename,
@@ -1498,7 +1500,13 @@ class DB:
         # Note: the caller is responsible for scheduling a metadata backup if necessary
         return changed
 
-    def create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):  # {{{
+    def create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):
+        # The row of the custom_columns table, the tables, views and triggers of the column and the preference are created in one
+        # transaction, so that a failure cannot leave a column without its tables or tables without a column
+        with self.conn:
+            return self._create_custom_column(label, name, datatype, is_multiple, editable=editable, display=display)
+
+    def _create_custom_column(self, label, name, datatype, is_multiple, editable=True, display={}):  # {{{
         import re
 
         if not label:
@@ -1986,7 +1994,8 @@ class DB:
         atomic_rename(src_path, dest_path)
         return os.path.getsize(dest_path)
 
-    def remove_formats(self, remove_map, metadata_map):
+    def remove_formats(self, remove_map, metadata_map, change=None):
+        # If change (a ChangeRecord) is given, the files are moved to the trash when the change commits
         self.ensure_trash_dir()
         removed_map = {}
         for book_id, removals in remove_map.items():
@@ -1998,7 +2007,10 @@ class DB:
                     paths.add(path)
                     removed_map[book_id].add(fmt.upper())
             if paths:
-                self.move_book_files_to_trash(book_id, paths, metadata_map[book_id])
+                if change is None:
+                    self.move_book_files_to_trash(book_id, paths, metadata_map[book_id])
+                else:
+                    change.after_commit(partial(self.move_book_files_to_trash, book_id, paths, metadata_map[book_id]))
         return removed_map
 
     def cover_last_modified(self, path) -> datetime | None:
@@ -2096,7 +2108,9 @@ class DB:
 
         compress_covers(cpath_map, jpeg_quality, progress_callback)
 
-    def set_cover(self, book_id, path, data, no_processing=False):
+    def set_cover(self, book_id, path, data, no_processing=False, change=None):
+        # If change (a ChangeRecord) is given, the new cover is only written to a temporary file in the folder of the book here, and the cover
+        # file is replaced (or removed, when data is None) when the change commits. The temporary file is removed if the change fails.
         path = os.path.abspath(os.path.join(self.library_path, path))
         if not os.path.exists(path):
             os.makedirs(path)
@@ -2108,25 +2122,60 @@ class DB:
         elif callable(getattr(data, 'read', None)):
             data = data.read()
         if data is None:
-            if os.path.exists(path):
-                try:
+            def remove_cover():
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        if iswindows:
+                            time.sleep(0.2)
+                        os.remove(path)
+
+            if change is None:
+                remove_cover()
+            else:
+                change.after_commit(remove_cover)
+            return
+        dest = path
+        if change is not None:
+            # The extension tells save_cover_data_to() which image format to write
+            path = os.path.join(os.path.dirname(dest), f'.{uuid.uuid4().hex[:16]}.tmp{os.path.splitext(dest)[1]}')
+
+            def remove_staged():
+                with suppress(OSError):
                     os.remove(path)
+
+            change.on_rollback(remove_staged)
+        try:
+            if no_processing:
+                with open(path, 'wb') as f:
+                    f.write(data)
+            else:
+                from calibre.utils.img import save_cover_data_to
+
+                try:
+                    save_cover_data_to(data, path)
                 except OSError:
                     if iswindows:
                         time.sleep(0.2)
+                    save_cover_data_to(data, path)
+        except BaseException:
+            if change is not None:
+                with suppress(OSError):
                     os.remove(path)
-        elif no_processing:
-            with open(path, 'wb') as f:
-                f.write(data)
-        else:
-            from calibre.utils.img import save_cover_data_to
+            raise
+        if change is not None:
+            def replace_cover():
+                try:
+                    os.replace(path, dest)
+                except OSError:
+                    if iswindows:
+                        time.sleep(0.2)
+                        os.replace(path, dest)
+                    else:
+                        raise
 
-            try:
-                save_cover_data_to(data, path)
-            except OSError:
-                if iswindows:
-                    time.sleep(0.2)
-                save_cover_data_to(data, path)
+            change.after_commit(replace_cover)
 
     def copy_format_to(self, book_id, fmt, fname, path, dest, windows_atomic_move=None, use_hardlink=False, report_file_size=None):
         path = self.format_abspath(book_id, fmt, fname, path)
@@ -2183,7 +2232,9 @@ class DB:
                 if os.path.exists(spath):
                     windows_check_if_files_in_use(spath)
 
-    def add_format(self, book_id, fmt, stream, title, author, path, current_name, mtime=None):
+    def add_format(self, book_id, fmt, stream, title, author, path, current_name, mtime=None, change=None):
+        # If change (a ChangeRecord) is given, the new contents are only staged in a temporary file here and the existing files are
+        # replaced when the change commits (change.after_commit()), the staged file is removed if the change fails.
         fmt = ('.' + fmt.lower()) if fmt else ''
         fname = self.construct_file_name(book_id, title, author, len(fmt))
         path = os.path.join(self.library_path, path)
@@ -2191,39 +2242,145 @@ class DB:
         if not os.path.exists(path):
             os.makedirs(path)
         size = 0
-        if current_name is not None:
-            old_path = os.path.join(path, current_name + fmt)
-            if old_path != dest:
-                # Ensure that the old format file is not orphaned, this can
-                # happen if the algorithm in construct_file_name is changed.
+        tmp_path = None
+        if not (isinstance(stream, str) and stream) and (not getattr(stream, 'name', False) or not samefile(dest, stream.name)):
+            # Read the new contents into a temporary file in the same folder before touching the existing format file, so that a
+            # stream that fails part way cannot destroy the existing file. It replaces the existing file atomically below.
+            tmp_path = os.path.join(path, f'.{uuid.uuid4().hex[:16]}.tmp')
+            try:
+                with open(tmp_path, 'wb') as f:
+                    shutil.copyfileobj(stream, f)
+                    size = f.tell()
+                if mtime is not None:
+                    os.utime(tmp_path, (mtime, mtime))
+            except BaseException:
+                with suppress(OSError):
+                    os.remove(tmp_path)
+                raise
+            stream = tmp_path
+        def finish():
+            if current_name is not None:
+                old_path = os.path.join(path, current_name + fmt)
+                if old_path != dest:
+                    # Ensure that the old format file is not orphaned, this can
+                    # happen if the algorithm in construct_file_name is changed.
+                    try:
+                        # rename rather than remove, so that if something goes
+                        # wrong in the rest of this function, at least the file is
+                        # not deleted
+                        os.replace(old_path, dest)
+                    except OSError as e:
+                        if getattr(e, 'errno', None) != errno.ENOENT:
+                            # Failing to rename the old format will at worst leave a
+                            # harmless orphan, so log and ignore the error
+                            import traceback
+
+                            traceback.print_exc()
+
+            if isinstance(stream, str) and stream:
                 try:
-                    # rename rather than remove, so that if something goes
-                    # wrong in the rest of this function, at least the file is
-                    # not deleted
-                    os.replace(old_path, dest)
-                except OSError as e:
-                    if getattr(e, 'errno', None) != errno.ENOENT:
-                        # Failing to rename the old format will at worst leave a
-                        # harmless orphan, so log and ignore the error
-                        import traceback
+                    try:
+                        os.replace(stream, dest)
+                    except OSError:
+                        if iswindows:
+                            time.sleep(1)
+                            os.replace(stream, dest)
+                        else:
+                            raise
+                except BaseException:
+                    if tmp_path is not None:
+                        with suppress(OSError):
+                            os.remove(tmp_path)
+                    raise
+            elif os.path.exists(dest):
+                # the stream is the format file itself
+                if mtime is not None:
+                    os.utime(dest, (mtime, mtime))
 
-                        traceback.print_exc()
+        if change is None:
+            finish()
+            if isinstance(stream, str) and stream or os.path.exists(dest):
+                size = os.path.getsize(dest)
+        else:
+            if isinstance(stream, str) and stream:
+                if tmp_path is None and os.path.exists(stream):
+                    size = os.path.getsize(stream)
+            elif os.path.exists(dest):
+                size = os.path.getsize(dest)
+            change.after_commit(finish)
+            if tmp_path is not None:
+                def remove_staged():
+                    with suppress(OSError):
+                        os.remove(tmp_path)
 
-        if isinstance(stream, str) and stream:
-            replace_with_retry(stream, dest)
-            size = os.path.getsize(dest)
-        elif not getattr(stream, 'name', False) or not samefile(dest, stream.name):
-            size = write_stream_to_format_file(stream, dest)
-            if mtime is not None:
-                os.utime(dest, (mtime, mtime))
-        elif os.path.exists(dest):
-            size = os.path.getsize(dest)
-            if mtime is not None:
-                os.utime(dest, (mtime, mtime))
+                change.on_rollback(remove_staged)
 
         return size, fname
 
-    def update_path(self, book_id, title, author, path_field, formats_field):
+    def update_path(self, book_id, title, author, path_field, formats_field, change=None):
+        """
+        Rename the folder of the book and its format files to match the title and author. Without a change the
+        move is done at once. With the ChangeRecord of a Cache._change() it is staged: the folder (or the
+        renamed format files) is copied (hardlinked when possible) next to the old one and the path and file
+        name rows are updated in the transaction of the change, on_rollback() removes the staged copy and the
+        old folder is removed from after_commit(), so the old folder is never read once the change is committed
+        and a failure before the commit leaves the old folder, path and names untouched. A failure to remove
+        the old folder only leaves a stray folder behind.
+        """
+        if change is not None:
+            return self._update_path(book_id, title, author, path_field, formats_field, change)
+        change = ChangeRecord()
+        try:
+            with self.conn:
+                self._update_path(book_id, title, author, path_field, formats_field, change)
+        except BaseException:
+            for func in change.rollback_callbacks:
+                with suppress(Exception):
+                    func()
+            raise
+        for func in change.callbacks:
+            func()
+
+    def _remove_staged_folder(self, tpath, parent, parent_created):
+        try:
+            with suppress(FileNotFoundError):
+                shutil.rmtree(make_long_path_useable(tpath))
+            if parent_created:
+                remove_dir_if_empty(parent, ignore_metadata_caches=True)
+        except Exception:
+            traceback.print_exc()
+
+    def _remove_replaced_folder(self, spath):
+        # Runs after the new path was committed, failures leave a stray folder, not an inconsistent library
+        try:
+            if os.path.exists(make_long_path_useable(spath)):
+                try:
+                    shutil.rmtree(make_long_path_useable(spath))
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    if not iswindows:
+                        raise
+                    time.sleep(WINDOWS_SLEEP_FOR_RETRY_TIME)
+                    shutil.rmtree(make_long_path_useable(spath))
+            with suppress(OSError):
+                remove_dir_if_empty(os.path.dirname(spath), ignore_metadata_caches=True)
+        except Exception:
+            traceback.print_exc()
+
+    def _finish_format_renames(self, remove_sources, case_renames):
+        for s in remove_sources:
+            try:
+                os.remove(make_long_path_useable(s))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                traceback.print_exc()
+        for s, d in case_renames.items():
+            with suppress(OSError):
+                os.replace(make_long_path_useable(s), make_long_path_useable(d))
+
+    def _update_path(self, book_id, title, author, path_field, formats_field, change):
         current_path = path_field.for_book(book_id, default_value='')
         path = self.construct_path_name(book_id, title, author)
         formats = formats_field.for_book(book_id, default_value=())
@@ -2233,7 +2390,10 @@ class DB:
             extlen = 10
         fname = self.construct_file_name(book_id, title, author, extlen)
 
-        def rename_format_files():
+        def stage_format_renames():
+            # Renames of the format files inside the folder of the book: the new names are created next to
+            # the old ones, the old ones are removed after the commit. Names that differ only in case on a
+            # case insensitive file system are the same file, they are renamed after the commit.
             changed = False
             for fmt in formats:
                 name = formats_field.format_fname(book_id, fmt)
@@ -2249,15 +2409,27 @@ class DB:
                         new_fmt_path = os.path.abspath(os.path.join(os.path.dirname(current_fmt_path), fname + '.' + fmt.lower()))
                         if current_fmt_path != new_fmt_path:
                             rename_map[current_fmt_path] = new_fmt_path
-                if rename_map:
-                    rename_files(rename_map)
+                copies, case_renames = {}, {}
+                for s, d in rename_map.items():
+                    (case_renames if samefile(s, d) else copies)[s] = d
+                if copies:
+                    created = tuple(d for d in copies.values() if not os.path.lexists(make_long_path_useable(d)))
+
+                    def remove_created():
+                        for d in created:
+                            with suppress(OSError):
+                                os.remove(make_long_path_useable(d))
+
+                    change.on_rollback(remove_created)
+                    copy_files(copies)
+                if copies or case_renames:
+                    change.after_commit(partial(self._finish_format_renames, tuple(copies), case_renames))
             return changed
 
         def update_paths_in_db():
-            with self.conn:
-                for fmt in formats:
-                    formats_field.table.set_fname(book_id, fmt, fname, self)
-                path_field.table.set_path(book_id, path, self)
+            for fmt in formats:
+                formats_field.table.set_fname(book_id, fmt, fname, self)
+            path_field.table.set_path(book_id, path, self)
 
         if not current_path:
             update_paths_in_db()
@@ -2265,7 +2437,7 @@ class DB:
 
         if path == current_path:
             # Only format paths have possibly changed
-            if rename_format_files():
+            if stage_format_renames():
                 update_paths_in_db()
             return
 
@@ -2273,7 +2445,7 @@ class DB:
         tpath = os.path.join(self.library_path, *path.split('/'))
         if samefile(spath, tpath):
             # format paths changed and case of path to book folder changed
-            rename_format_files()
+            stage_format_renames()
             update_paths_in_db()
             curpath = self.library_path
             c1, c2 = current_path.split('/'), path.split('/')
@@ -2286,13 +2458,18 @@ class DB:
                 # by checking each segment. If they are different because of case,
                 # then rename the segment. Note that the code above correctly
                 # handles files in the directories, so no need to do them here.
-                for oldseg, newseg in zip(c1, c2):
-                    if oldseg.lower() == newseg.lower() and oldseg != newseg:
-                        try:
-                            os.replace(os.path.join(curpath, oldseg), os.path.join(curpath, newseg))
-                        except OSError:
-                            break  # Fail silently since nothing catastrophic has happened
-                    curpath = os.path.join(curpath, newseg)
+                # It runs after the commit and fails silently since nothing catastrophic has happened.
+                def rename_case_segments():
+                    cp = self.library_path
+                    for oldseg, newseg in zip(c1, c2):
+                        if oldseg.lower() == newseg.lower() and oldseg != newseg:
+                            try:
+                                os.replace(os.path.join(cp, oldseg), os.path.join(cp, newseg))
+                            except OSError:
+                                break
+                        cp = os.path.join(cp, newseg)
+
+                change.after_commit(rename_case_segments)
             return
 
         with suppress(FileNotFoundError):
@@ -2315,16 +2492,20 @@ class DB:
                 return dest_path
             return os.path.join(os.path.dirname(dest_path), fname + '.' + fmt)
 
+        # Stage the new folder. Several books of one change can share a new author folder, the one that
+        # created it is the first to stage into it and the rollbacks remove it once it is empty.
+        parent = os.path.dirname(tpath)
+        created_parents = change.__dict__.setdefault('staged_parent_folders', set())
+        parent_created = parent in created_parents or not os.path.isdir(parent)
+        created_parents.add(parent)
+        change.on_rollback(partial(self._remove_staged_folder, tpath, parent, parent_created))
         if os.path.exists(spath):
             copy_tree(
                 os.path.abspath(spath),
                 tpath,
-                delete_source=True,
                 transform_destination_filename=transform_format_filenames,
             )
-            parent = os.path.dirname(spath)
-            with suppress(OSError):
-                remove_dir_if_empty(parent, ignore_metadata_caches=True)
+            change.after_commit(partial(self._remove_replaced_folder, spath))
         else:
             os.makedirs(tpath)
         update_paths_in_db()

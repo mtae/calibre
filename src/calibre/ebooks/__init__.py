@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from contextlib import suppress
+from functools import lru_cache
 
 from calibre import prints
 from calibre.ebooks.chardet import xml_to_unicode
@@ -233,20 +234,34 @@ def calibre_cover(title, author_string, series_string=None, output_format='jpg',
 UNIT_RE = re.compile(r'^(-*[0-9]*[.]?[0-9]*)\s*(%|em|ex|en|px|mm|cm|in|pt|pc|rem|q)$')
 
 
+@lru_cache(maxsize=2048)
+def _parse_length(value):
+    # (number, unit) for a CSS length, unit is None for a plain number. None if
+    # value is not a length. Cached as unit_convert() is called for most CSS
+    # properties of every element, with the same few dozen strings.
+    with suppress(Exception):
+        return float(value), None
+    m = UNIT_RE.match(value)
+    if m is not None and m.group(1):
+        try:
+            return float(m.group(1)), m.group(2)
+        except ValueError:
+            return 0, m.group(2)
+
+
 def unit_convert(value, base, font, dpi, body_font_size=12):
     "Return value in pts"
     if isinstance(value, numbers.Number):
         return value
-    with suppress(Exception):
-        return float(value) * 72.0 / dpi
     result = value
-    m = UNIT_RE.match(value)
-    if m is not None and m.group(1):
-        try:
-            value = float(m.group(1))
-        except ValueError:
-            value = 0
-        unit = m.group(2)
+    parsed = _parse_length(value)
+    if parsed is not None:
+        value, unit = parsed
+        if unit is None:
+            try:
+                return value * 72.0 / dpi
+            except Exception:
+                return result
         if unit == '%':
             result = (value / 100.0) * base
         elif unit == 'px':

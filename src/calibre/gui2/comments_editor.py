@@ -755,6 +755,8 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             return
 
         for url, pos in pos_map.items():
+            if url not in data_map:  # download failed, reported below
+                continue
             fname, data = data_map[url]
             newname = self.commit_downloaded_image(data, fname)
             c = self.textCursor()
@@ -1432,14 +1434,19 @@ class EditorWidget(QTextEdit, LineEditECM):  # {{{
             if isinstance(list_fmt, QTextListFormat):
                 editcur.createList(list_fmt)
 
-            fragment_text = func(cast('str', blk['fragment_text']))
+            orig_text = cast('str', blk['fragment_text'])
+            fragment_text = func(orig_text)
             # insert the fragments for this block, preserving char formats
             for start_pos, length, ch_fmt in cast('list[tuple[int, int, QTextCharFormat]]', blk['fragments']):
-                if start_pos >= len(fragment_text):
-                    break
                 # Convert selected fragment text
                 # (paragraph separators are not part of per-fragment text here)
-                editcur.insertText(fragment_text[start_pos : start_pos + length], ch_fmt)
+                if len(fragment_text) == len(orig_text):
+                    text = fragment_text[start_pos : start_pos + length]
+                else:
+                    # The fragment offsets do not apply to a length changing
+                    # conversion (such as the German sharp s to SS)
+                    text = func(orig_text[start_pos : start_pos + length])
+                editcur.insertText(text, ch_fmt)
 
         editcur.endEditBlock()
 
@@ -1790,6 +1797,7 @@ class Editor(QWidget):  # {{{
             if self.wyswyg_dirty:
                 self.code_edit.setPlainText(self.editor.html)
                 self.wyswyg_dirty = False
+                self.source_dirty = False  # setPlainText emitted textChanged
         elif index == 0:  # changing to wyswyg
             if self.source_dirty:
                 self.editor.html = to_plain_text(self.code_edit)
@@ -1848,6 +1856,53 @@ class Editor(QWidget):  # {{{
 
 
 # }}}
+
+
+def find_tests():
+    import unittest
+
+    class TestModifyCase(unittest.TestCase):
+        def convert(self, parts, func):
+            doc = QTextDocument()
+            cursor = QTextCursor(doc)
+            for text, italic in parts:
+                fmt = QTextCharFormat()
+                fmt.setFontItalic(italic)
+                cursor.insertText(text, fmt)
+
+            class Editor:
+                def textCursor(self):
+                    return QTextCursor(doc)
+
+                def document(self):
+                    return doc
+
+                def setTextCursor(self, cursor):
+                    pass
+
+            EditorWidget.modify_case_operation(Editor(), func)
+            ans = []
+            it = doc.firstBlock().begin()
+            while not it.atEnd():
+                frag = it.fragment()
+                ans.append((frag.text(), frag.charFormat().fontItalic()))
+                it += 1
+            return ans
+
+        def test_modify_case_length_changing(self):
+            from calibre.utils.icu import upper
+
+            for func in (str.upper, upper):
+                self.assertEqual(self.convert([('Stra\xdfe', False)], func), [('STRASSE', False)])
+                self.assertEqual(self.convert([('Stra\xdfe ', False), ('foo', True)], func), [('STRASSE ', False), ('FOO', True)])
+            # shrinking: the italic fragment must not be dropped
+            self.assertEqual(self.convert([('ss', False), ('ss', True)], lambda x: x.replace('ss', '\xdf')), [('\xdf', False), ('\xdf', True)])
+
+        def test_modify_case_keeps_context_across_fragments(self):
+            self.assertEqual(self.convert([('hE', False), ('LLo', True)], str.capitalize), [('He', False), ('llo', True)])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestModifyCase)
+
 
 if __name__ == '__main__':
     from calibre.gui2 import Application

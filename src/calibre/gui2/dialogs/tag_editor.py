@@ -257,8 +257,10 @@ class TagEditor(QDialog, Ui_TagEditor):
         row_indices = list(_appl_sel_model.selectedRows())
         tags = [r.data() for r in row_indices]
         row_indices.sort(key=lambda r: r.row(), reverse=True)
+        applied_model = self.applied_tags.model()
+        assert applied_model is not None
         for item in row_indices:
-            self.applied_model.removeRows(item.row(), 1)
+            applied_model.removeRows(item.row(), 1)
 
         if self.restrict_to_vl.isChecked():
             vl_tags = self._get_vl_tags()

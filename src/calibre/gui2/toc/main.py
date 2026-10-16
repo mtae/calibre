@@ -614,7 +614,7 @@ class TreeWidget(QTreeWidget):  # {{{
         for item in items:
             old_parent = item.parent()
             if old_parent is None:
-                return
+                continue
 
             old_index = old_parent.indexOfChild(item)
             was_expanded = item.isExpanded() or item.childCount() == 0

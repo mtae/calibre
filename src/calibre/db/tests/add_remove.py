@@ -3,6 +3,7 @@
 
 import glob
 import os
+import threading
 from contextlib import suppress
 from datetime import timedelta
 from io import BytesIO
@@ -496,6 +497,67 @@ class AddRemoveTest(BaseTest):
 
     # }}}
 
+    def test_add_books_one_transaction(self):  # {{{
+        "Test that a book is added with its formats in one transaction, and that a book that fails to add leaves nothing behind"
+        import threading
+
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        class FailingStream(BytesIO):
+            def read(self, *a):
+                raise OSError('Injected failure reading the format')
+
+        def state(cache, book_ids):
+            return {x: (cache.field_for('title', x), cache.field_for('authors', x), cache.field_for('tags', x), cache.format(x, 'FMT1')) for x in book_ids}
+
+        for run_hooks in (False, True):
+            for bad_position in (-1, 0, 2):
+                label = f'run_hooks={run_hooks} bad_position={bad_position}'
+                cache = self.init_cache(self.clone_library(self.library_path))
+                ids_before = cache.all_book_ids()
+                commits = []
+                this_thread = threading.get_ident()  # The scan of pages commits in a thread of its own
+                cache.backend.conn.set_commit_hook(lambda: (commits.append(1) if threading.get_ident() == this_thread else None, False)[1])
+                books = []
+                for i in range(4):
+                    mi = Metadata(f'Batch Book {i}', [f'Batch Author {i}'])
+                    mi.tags = ['batch', f'batch{i}']
+                    stream = FailingStream(b'x') if i == bad_position else BytesIO(f'batch data {i}'.encode())
+                    books.append((mi, {'FMT1': stream, 'FMT2': BytesIO(f'second {i}'.encode())}))
+                if bad_position < 0:
+                    ids, duplicates = cache.add_books(books, run_hooks=run_hooks)
+                    self.assertEqual((len(ids), duplicates), (4, []), label)
+                    added = sorted(ids)
+                else:
+                    with self.assertRaises(OSError, msg=label):
+                        cache.add_books(books, run_hooks=run_hooks)
+                    added = sorted(cache.all_book_ids() - ids_before)
+                    self.assertEqual([cache.field_for('title', x) for x in added], [f'Batch Book {i}' for i in range(bad_position)], label)
+                self.assertEqual(len(commits), len(added), f'{label}: not one commit per added book')
+                for i, x in enumerate(added):
+                    formats = {f: cache.format(x, f) for f in cache.formats(x)}
+                    self.assertEqual(formats, {'FMT1': f'batch data {i}'.encode(), 'FMT2': f'second {i}'.encode()}, label)
+                # The cache agrees with the database
+                book_ids, cache_state, library_path = cache.all_book_ids(), state(cache, cache.all_book_ids()), cache.backend.library_path
+                cache.close()  # Stops its background threads, which write to the database
+                reader = self.init_cache(library_path)
+                self.assertEqual((book_ids, cache_state), (reader.all_book_ids(), state(reader, book_ids)), label)
+                if bad_position >= 0:
+                    self.assertFalse(reader.search(f'title:"=Batch Book {bad_position}"'), label)
+                    # The failed book can be added again
+                    cache = reader
+                    retry = Metadata(f'Batch Book {bad_position}', ['Batch Author'])
+                    ids, duplicates = cache.add_books([(retry, {'FMT1': BytesIO(b'retry')})], run_hooks=run_hooks)
+                    self.assertEqual(len(ids), 1, label)
+                reader.close()
+        cache = self.init_cache()
+        mi = Metadata('Duplicate Test', ['Some One'])
+        self.assertEqual(len(cache.add_books([(mi, {'FMT1': BytesIO(b'a')})])[0]), 1)
+        ids, duplicates = cache.add_books([(Metadata('Duplicate Test', ['Some One']), {'FMT1': BytesIO(b'b')})], add_duplicates=False)
+        self.assertEqual((ids, len(duplicates)), ([], 1))
+
+    # }}}
+
     def test_add_books(self):  # {{{
         "Test the adding of new books"
         from calibre.ebooks.metadata.book.base import Metadata
@@ -511,6 +573,61 @@ class AddRemoveTest(BaseTest):
         self.assertEqual(set(cache.formats(book_id)), {'FMT1', 'FMT2'})
         self.assertEqual(cache.format(book_id, 'FMT1'), FMT1)
         self.assertEqual(cache.format(book_id, 'FMT2'), FMT2)
+
+    # }}}
+
+    def test_add_books_failing_book(self):  # {{{
+        "Test that a book that cannot be added leaves no trace and the books added before it stay added, and that every book is one transaction"
+        from calibre.ebooks.metadata.book.base import Metadata
+
+        class FailingStream(BytesIO):
+            def read(self, *a):
+                raise OSError('Injected failure reading the format')
+
+        for run_hooks in (False, True):
+            for bad_position in (0, 2, 3):
+                cache = self.init_cache(self.clone_library(self.library_path))
+                backend = cache.backend
+                ids_before = cache.all_book_ids()
+                commits = []
+                # Commits made by this thread (the scan of pages runs in a thread of its own)
+                this_thread = threading.get_ident()
+                backend.conn.set_commit_hook(lambda: (commits.append(1) if threading.get_ident() == this_thread else None, False)[1])
+                events = []
+                dispatcher = cache.event_dispatcher
+
+                class Recorder:
+                    def __call__(self, event_type, *args):
+                        events.append((event_type.name, args))
+                        return dispatcher(event_type, *args)
+
+                    def __getattr__(self, name):
+                        return getattr(dispatcher, name)
+
+                cache.event_dispatcher = Recorder()
+                books = []
+                for i in range(4):
+                    mi = Metadata(f'Batch Book {i}', [f'Batch Author {i}'])
+                    stream = FailingStream(b'x') if i == bad_position else BytesIO(f'batch data {i}'.encode())
+                    books.append((mi, {'FMT1': stream, 'FMT2': BytesIO(f'second {i}'.encode())}))
+                label = f'run_hooks={run_hooks} bad_position={bad_position}'
+                with self.assertRaises(OSError, msg=label):
+                    cache.add_books(books, run_hooks=run_hooks)
+                added = sorted(cache.all_book_ids() - ids_before)
+                self.assertEqual(len(added), bad_position, label)
+                self.assertEqual([cache.field_for('title', x) for x in added], [f'Batch Book {i}' for i in range(bad_position)], label)
+                for i, x in enumerate(added):
+                    self.assertEqual({f: cache.format(x, f) for f in cache.formats(x)}, {'FMT1': f'batch data {i}'.encode(), 'FMT2': f'second {i}'.encode()}, label)
+                self.assertEqual(len(commits), bad_position, f'{label}: not one commit per added book')
+                self.assertEqual([x for x in events if x[0] == 'book_created'], [('book_created', (x,)) for x in added], label)
+                self.assertFalse(cache.fields['title'].table.book_col_map.keys() - cache.all_book_ids(), label)
+                self.assert_library_consistent(cache)
+                self.assertFalse(cache.search('title:"=Batch Book %d"' % bad_position), label)
+                # The failed book can be added again
+                ids, duplicates = cache.add_books([(Metadata(f'Batch Book {bad_position}', ['Batch Author']), {'FMT1': BytesIO(b'retry')})], run_hooks=run_hooks)
+                self.assertEqual(len(ids), 1, label)
+                self.assert_library_consistent(cache)
+                cache.close()
 
     # }}}
 

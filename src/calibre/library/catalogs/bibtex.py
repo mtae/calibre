@@ -261,7 +261,7 @@ class BIBTEX(CatalogPlugin):
                     if tpl_field in ['pubdate', 'timestamp']:
                         tpl_field = isoformat(entry[tpl_field]).partition('T')[0]
                     elif tpl_field in ['tags', 'authors']:
-                        tpl_field = entry[tpl_field][0]
+                        tpl_field = entry[tpl_field][0] if entry[tpl_field] else ''
                     elif tpl_field in ['id', 'series_index']:
                         tpl_field = str(entry[tpl_field])
                     else:
@@ -413,3 +413,30 @@ class BIBTEX(CatalogPlugin):
 
             for entry in data:
                 outfile.write(create_bibtex_entry(entry, fields, bib_entry, template_citation, bibtexc, db, citation_bibtex, addfiles_bibtex))
+
+
+def find_tests():
+    import tempfile
+    import unittest
+    from types import SimpleNamespace
+
+    class TestBibtex(unittest.TestCase):
+        def test_citation_template_with_tags_field(self):
+            from calibre.db.legacy import LibraryDatabase
+            from calibre.ebooks.metadata.book.base import Metadata
+
+            with tempfile.TemporaryDirectory() as tdir:
+                db = LibraryDatabase(tdir)
+                try:
+                    db.create_book_entry(Metadata('Title', ['Author']))  # book without tags
+                    opts = SimpleNamespace(
+                        search_text='', ids=None, sort_by=None, fields='title', verbose=False, connected_device={'is_device_connected': False},
+                        bibfile_enc=0, bibfile_enctag=0, bib_entry=0, impcit=True, addfiles=False, bib_cit='{tags}{id}')
+                    path = os.path.join(tdir, 'out.bib')
+                    BIBTEX(None).run(path, opts, db)
+                    with open(path, encoding='utf-8') as f:
+                        self.assertIn('@misc{ 1,', f.read())
+                finally:
+                    db.close()
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(TestBibtex)

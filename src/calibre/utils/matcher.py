@@ -279,6 +279,33 @@ def test(return_tests=False):
             positions = next(iter(m(raw).values()))
             self.assertEqual(positions, (0, 1, 2))
 
+        def test_invalid_items(self):
+            for items in ([1], ['abc', 2], [b'abc'], [None]):
+                with self.assertRaises(TypeError, msg=f'Matcher({items!r}) did not raise a TypeError'):
+                    CScorer(items)
+
+        @unittest.skipIf(getattr(sys, 'frozen', False), 'The subprocess helper does not work in frozen builds')
+        def test_empty_items(self):
+            # Matcher() filters out empty items, but the C extension accepts
+            # them. An empty item among non empty ones used to crash the
+            # interpreter, because the error from the ICU search for it was set
+            # without holding the GIL, so run this in a subprocess.
+            from calibre.utils.icu_test import run_in_subprocess
+
+            code = """
+from calibre.utils.matcher import CScorer
+for items in (['', 'abc'], ['abc', ''], ['a', '', 'ab', ''], ['', 'a', '']):
+    scores, positions = CScorer(items).m.calculate_scores('a')
+    for item, score, pos in zip(items, scores, positions):
+        if item:
+            assert score > 0 and pos == (0,), (items, scores, positions)
+        else:
+            assert score == 0.0 and pos == (-1,), (items, scores, positions)
+print('OK')
+"""
+            p = run_in_subprocess(code)
+            self.assertEqual((p.returncode, p.stdout.strip()), (0, 'OK'), f'returncode={p.returncode}\nstdout={p.stdout}\nstderr={p.stderr}')
+
     if return_tests:
         return unittest.TestLoader().loadTestsFromTestCase(Test)
 

@@ -11,6 +11,7 @@ from calibre.ebooks.oeb.polish.kepubify import (
     Options,
     kepubify_html_data,
     kepubify_parsed_html,
+    remove_kobo_spans,
     serialize_html,
     unkepubify_path,
 )
@@ -159,3 +160,18 @@ class KepubifyTests(BaseTest):
                 expected = expected, expected
             perform(src, expected[0], False)
             perform(src, expected[1], True)
+
+    def test_remove_kobo_spans(self):
+        span = '<span class="koboSpan" id="kobo.1.1">{}</span>'
+        for src, expected in {
+            f'<p>a {span.format("b")} c</p>': '<p>a b c</p>',
+            f'<p>{span.format("b")}c</p>': '<p>bc</p>',
+            # spans containing other elements, such as an image with whitespace after it
+            f'<p>one{span.format("<img src=x />")} <b>bold</b> end</p>': '<p>one<img src="x"/> <b>bold</b> end</p>',
+            f'<p>a {span.format("one <b>two</b> three <i>four</i> five")} tail</p>': '<p>a one <b>two</b> three <i>four</i> five tail</p>',
+            f'<p>{span.format("one <b>two</b>")}</p>': '<p>one <b>two</b></p>',
+        }.items():
+            root = parse(src)
+            self.assertTrue(remove_kobo_spans(root))
+            actual = serialize_html(root).decode('utf-8')
+            self.assertEqual(serialize_html(parse(expected)).decode('utf-8'), actual, f'\n\nText:\n{src}')

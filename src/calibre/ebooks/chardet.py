@@ -102,7 +102,7 @@ def find_declared_encoding(raw, limit=50 * 1024):
             ans = m.group(1)
             if is_binary:
                 ans = ans.decode('ascii', 'replace')
-                return ans
+            return ans
 
 
 _CHARSET_ALIASES = {'macintosh': 'mac-roman', 'x-sjis': 'shift-jis', 'mac-centraleurope': 'cp1250'}

@@ -48,6 +48,77 @@ ONE_ONE, MANY_ONE, MANY_MANY = range(3)
 null = object()
 
 
+def safe_lower(x):
+    try:
+        return icu_lower(x)
+    except TypeError, ValueError, KeyError, AttributeError:
+        return x
+
+
+class IdMap(dict):
+    """
+    The map of item ids to item values (id_map) of a table of items such as tags
+    or authors. It can also provide the reverse map from lowercased values to
+    item ids (see :meth:`lower_index`), which writing a book needs to find the
+    ids of its authors, tags, etc. The reverse map is built once, when first
+    needed, and updated when items are added. Any other change to the map drops
+    it, so it is rebuilt when next needed and can never be stale.
+    """
+
+    __slots__ = ('_lower_index',)
+
+    def __init__(self, *args, **kw):
+        self._lower_index = None
+        super().__init__(*args, **kw)
+
+    def lower_index(self):
+        """ The map {lowercased value: item id}, the item that comes last in the map is used if several
+        have the same lowercased value. This is the dict that is kept up to date, do not modify it. """
+        if self._lower_index is None:
+            self._lower_index = {safe_lower(v): k for k, v in self.items()}
+        return self._lower_index
+
+    def __setitem__(self, key, value):
+        if self._lower_index is not None:
+            if key in self:
+                self._lower_index = None
+            else:
+                self._lower_index[safe_lower(value)] = key
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        self._lower_index = None
+        super().__delitem__(key)
+
+    def pop(self, *args):
+        self._lower_index = None
+        return super().pop(*args)
+
+    def popitem(self):
+        self._lower_index = None
+        return super().popitem()
+
+    def clear(self):
+        self._lower_index = None
+        super().clear()
+
+    def update(self, *args, **kw):
+        self._lower_index = None
+        super().update(*args, **kw)
+
+    def setdefault(self, key, default=None):
+        self._lower_index = None
+        return super().setdefault(key, default)
+
+    def __ior__(self, other):
+        self._lower_index = None
+        return super().__ior__(other)
+
+    def __reduce__(self):
+        # Copies are plain dicts, so they cannot share the index
+        return dict, (dict(self),)
+
+
 class Table:
     supports_notes = False
 
@@ -255,7 +326,7 @@ class ManyToOneTable(Table):
     supports_notes = True
 
     def read(self, db):
-        self.id_map = {}
+        self.id_map = IdMap()
         self.link_map = {}
         self.col_book_map = defaultdict(set)
         self.book_col_map = {}
@@ -443,7 +514,7 @@ class RatingTable(ManyToOneTable):
         # be represented as rating:None instead.
         bad_ids = {item_id for item_id, rating in self.id_map.items() if rating == 0}
         if bad_ids:
-            self.id_map = {item_id: rating for item_id, rating in self.id_map.items() if rating != 0}
+            self.id_map = IdMap((item_id, rating) for item_id, rating in self.id_map.items() if rating != 0)
             db.executemany(
                 'DELETE FROM {} WHERE {}=?'.format(self.link_table, self.metadata['link_column']),
                 tuple((x,) for x in bad_ids),
@@ -629,7 +700,7 @@ class AuthorsTable(ManyToManyTable):
     def read_id_maps(self, db):
         self.link_map = lm = {}
         self.asort_map = sm = {}
-        self.id_map = im = {}
+        self.id_map = im = IdMap()
         us = self.unserialize
         assert us is not None
         for aid, name, sort, link in db.execute('SELECT id, name, sort, link FROM authors'):

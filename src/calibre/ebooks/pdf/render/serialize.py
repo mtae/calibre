@@ -427,7 +427,11 @@ class PDFStream:
             bytes_per_line = (w + 7) >> 3
             mono_bits = image.constBits()
             assert mono_bits is not None
-            data = mono_bits.asstring(bytes_per_line * h)
+            # QImage pads every scanline to a multiple of 4 bytes
+            stride = image.bytesPerLine()
+            data = mono_bits.asstring(stride * h)
+            if stride != bytes_per_line:
+                data = b''.join(data[i : i + bytes_per_line] for i in range(0, stride * h, stride))
             return self.write_image(data, w, h, d, cache_key=cache_key)
 
         has_alpha = False
@@ -521,3 +525,32 @@ class PDFStream:
         self.write_line('startxref')
         self.write_line(f'{startxref}')
         self.stream.write('%%EOF')
+
+
+def find_tests():
+    import io
+    import unittest
+
+    class SerializeTest(unittest.TestCase):
+        def test_mono_image_with_padded_scanlines(self):
+            w, h = 10, 3  # 2 bytes of pixels per row, but QImage pads rows to 4 bytes
+            img = QImage(w, h, QImage.Format.Format_Mono)
+            img.setColorTable([QColor(Qt.GlobalColor.black).rgba(), QColor(Qt.GlobalColor.white).rgba()])
+            img.fill(0)
+            for y in range(h):
+                img.setPixel(y, y, 1)
+            self.assertGreater(img.bytesPerLine(), (w + 7) >> 3)
+            expected = b''.join(img.constScanLine(y).asstring(2) for y in range(h))
+            stream = PDFStream(io.BytesIO(), (595, 842), compress=False)
+            written = []
+            stream.write_image = lambda data, *a, **kw: written.append(data)
+            stream.add_image(img, 'mono')
+            self.assertEqual(written, [expected])
+
+    return unittest.defaultTestLoader.loadTestsFromTestCase(SerializeTest)
+
+
+if __name__ == '__main__':
+    from calibre.utils.run_tests import run_tests
+
+    run_tests(find_tests)

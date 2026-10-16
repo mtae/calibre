@@ -1756,16 +1756,29 @@ class TemplateFormatter(string.Formatter):
         return str(('{0:' + fmt + '}').format(val))
 
     def _explode_format_string(self, fmt):
+        # The result depends only on the format string, and the same few
+        # strings are exploded once per book per template, so cache it.
+        try:
+            return self._explode_cache[fmt]
+        except (KeyError, TypeError):
+            pass
         try:
             matches = self.format_string_re.match(fmt)
             if matches is None or matches.lastindex != 3:
-                return fmt, '', ''
-            return matches.groups()
+                ans = fmt, '', ''
+            else:
+                ans = matches.groups()
         except Exception:
             if DEBUG:
                 traceback.print_exc()
             return fmt, '', ''
+        if isinstance(fmt, str):
+            if len(self._explode_cache) > 1000:
+                self._explode_cache.clear()
+            self._explode_cache[fmt] = ans
+        return ans
 
+    _explode_cache = {}
     format_string_re = re.compile(r'^(.*)\|([^\|]*)\|(.*)$', re.DOTALL)
     compress_spaces = re.compile(r'\s+')
     backslash_comma_to_comma = re.compile(r'\\,')

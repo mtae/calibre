@@ -623,7 +623,7 @@ class BooksView(TableView):  # {{{
             assert db_data is not None
             tt_dict = db_new_api.pref('column_tooltip_templates', {})
             for i in range(min(len(rows), 10)):
-                mi.append(db_new_api.get_proxy_metadata(db_data.index_to_id(i)))
+                mi.append(db_new_api.get_proxy_metadata(db_data.index_to_id(rows[i].row())))
             template = tt_dict.get(column, '')
             text_is_placeholder = False
             if not template:

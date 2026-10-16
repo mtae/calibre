@@ -415,6 +415,7 @@ class Dictionaries:
         locale = locale or self.default_locale
         d = self.dictionary_for_locale(locale)
         has_unicode_hyphen = '\u2010' in word
+        has_unicode_apostrophe = '\u2019' in word
         ans = ()
 
         def add_suggestion(w, ans):
@@ -443,6 +444,8 @@ class Dictionaries:
 
         if has_unicode_hyphen:
             ans = tuple(w.replace('-', '\u2010') for w in ans)
+        if has_unicode_apostrophe:
+            ans = tuple(w.replace("'", '\u2019') for w in ans)
         return ans
 
 
@@ -475,6 +478,7 @@ def find_tests():
             d = load_dictionary(get_dictionary(parse_lang_code('es-ES'))).obj
             self.assertTrue(d.recognized('Ahí'))
             self.assertIn('one\u2010half', self.suggestions('oone\u2010half'))
+            self.assertIn('doesn\u2019t', self.suggestions('dosn\u2019t'))
             d = load_dictionary(get_dictionary(parse_lang_code('es'))).obj
             self.assertIn('adequately', self.suggestions('ade-quately'))
             self.assertIn('magic. Wand', self.suggestions('magic.wand'))

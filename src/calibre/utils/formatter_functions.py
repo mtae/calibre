@@ -3567,7 +3567,7 @@ This function can be used only in the GUI and the content server.
                     if format_string:
                         return format_date(datetime.fromtimestamp(val), format_string)  # noqa: DTZ006
                     return str(val)
-            return str(1.0)
+            return str(-1)
         except Exception as e:
             traceback.print_exc()
             raise ValueError(e)

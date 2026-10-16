@@ -608,9 +608,11 @@ class HeuristicProcessor:
         # Each \s* here is followed by a tag, which starts with <, or ends the match, so giving
         # whitespace back never helps. Possessive, the engine no longer tries every way of
         # dividing a run of whitespace between the \s* in a row, which is cubic.
+        # A match starts at the start of a whitespace run (?<!\s), or at its end (?<=\s)(?!\s), where the
+        # previous match stopped after consuming the run, so a long run is not rescanned from every position.
         for i in range(2):
-            html = re.sub(r'\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
-            html = re.sub(rf'\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
+            html = re.sub(r'(?:(?<!\s)|(?<=\s)(?!\s))\s*+<span[^>]*+>\s*+(<span[^>]*+>\s*+</span>){0,2}\s*+</span>\s*+', ' ', html)
+            html = re.sub(rf'(?:(?<!\s)|(?<=\s)(?!\s))\s*+{open_fmt_pat}\s*+({open_fmt_pat}\s*+{close_fmt_pat}\s*+){{0,2}}\s*+{close_fmt_pat}', ' ', html)
         # delete surrounding divs from empty paragraphs
         html = re.sub(r'<div[^>]*>\s*<p[^>]*>\s*</p>\s*</div>', '<p> </p>', html)
         # Empty heading tags

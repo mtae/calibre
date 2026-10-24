@@ -104,8 +104,7 @@ def espeak_data_dir() -> str:
 
 def create_voice_config(config_path: str, length_scale_multiplier: float = 0, sentence_delay: float = 0.2) -> VoiceConfig:
     cfg = load_voice_config(config_path)
-    from calibre.utils.tts.kokoro import speed_from_rate
-    m = 1 / speed_from_rate(length_scale_multiplier)  # maps -1 to 1 to 2 to 0.5
+    m = max(0.1, 1 + -1 * max(-1, min(length_scale_multiplier, 1)))  # maps -1 to 1 to 2 to 0.1
     cfg = cfg._replace(sentence_delay=sentence_delay, length_scale=cfg.length_scale * m)
     return cfg
 

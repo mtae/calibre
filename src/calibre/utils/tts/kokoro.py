@@ -888,10 +888,15 @@ class G2P:
 
 
 def speed_from_rate(rate: float) -> float:
-    # Map the rate in [-1, 1] to the model's speed using the same mapping
-    # as is used for the length scale of Piper models
-    m = max(0.1, 1 - max(-1, min(rate, 1)))
-    return min(3, 1 / m)
+    # Map the rate in [-1, 1] to the speed of the model. Rates above zero map
+    # to speed 1 + rate, so that the 160% shown by the speed slider is 1.6 times
+    # normal speed. The model predicts a whole number of audio frames for every
+    # phoneme, at least one, so faster speeds make most phonemes collapse to
+    # that minimum and the speech becomes unintelligible.
+    rate = max(-1, min(rate, 1))
+    if rate >= 0:
+        return 1 + rate
+    return 1 / (1 - rate)
 
 
 def find_tests():
@@ -957,6 +962,14 @@ def find_tests():
             self.assertEqual(g.lexicon.number_words('1' * 5000, ''), ['one'] * 5000)
             self.assertEqual(g.lexicon.number_words('9' * 20 + '.5', '$'), ['nine'] * 20 + ['point', 'five'])
             self.assertEqual(g.lexicon.number_words('1' * 16 + '.5', ''), ['one'] * 16 + ['point', 'five'])
+
+        def test_kokoro_speed_from_rate(self):
+            self.assertEqual(speed_from_rate(0), 1)
+            self.assertAlmostEqual(speed_from_rate(0.6), 1.6)  # the 160% setting
+            self.assertEqual(speed_from_rate(1), 2)
+            self.assertEqual(speed_from_rate(5), 2)
+            self.assertEqual(speed_from_rate(-1), 0.5)
+            self.assertEqual(speed_from_rate(-5), 0.5)
 
         def test_kokoro_split_phonemes(self):
             vocab = {c: i for i, c in enumerate('abc ,.')}
